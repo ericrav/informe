@@ -1,0 +1,380 @@
+import { EntryEditor } from './editor';
+import {
+  normalizeInformeFields,
+  type Entry,
+  type InformeFieldKey,
+  type InformeFieldMap,
+  type InformeFieldValue,
+  type InformeResolvedValue,
+  type SchemaDescriptorMap,
+} from './input';
+
+export interface InformeOptions {
+  debounceMs?: number;
+  className?: string;
+}
+
+export interface InformeChangeDetail<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> {
+  informe: Informe<TFields>;
+}
+
+export type InformeChangeEvent<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = CustomEvent<InformeChangeDetail<TFields>>;
+export type InformeChangeEventListener<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = (this: Informe<TFields>, event: InformeChangeEvent<TFields>) => void;
+
+export class Informe<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> extends EventTarget {
+  private entryList: Entry[];
+  private fields: TFields;
+  private schema: SchemaDescriptorMap;
+  private editor: EntryEditor | undefined;
+  private options: InformeOptions;
+
+  constructor(fields: TFields, options: InformeOptions = {}) {
+    super();
+
+    const normalized = normalizeInformeFields(fields);
+
+    this.entryList = normalized.entries;
+    this.fields = fields;
+    this.schema = normalized.schema;
+    this.options = {
+      debounceMs: options.debounceMs,
+      className: options.className,
+    };
+  }
+
+  mount(container: HTMLElement): this {
+    if (this.editor) {
+      throw new Error('Informe is already mounted.');
+    }
+
+    this.editor = new EntryEditor(container, {
+      entries: this.entryList,
+      schema: this.schema,
+      debounceMs: this.options.debounceMs,
+      className: this.options.className,
+      onChange: (entries) => {
+        this.entryList = entries;
+        this.dispatchChange();
+      },
+    });
+
+    return this;
+  }
+
+  addEventListener(
+    type: 'change',
+    listener: InformeChangeEventListener<TFields> | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: string,
+    listener:
+      | EventListenerOrEventListenerObject
+      | InformeChangeEventListener<TFields>
+      | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(
+      type,
+      listener as EventListenerOrEventListenerObject | null,
+      options,
+    );
+  }
+
+  removeEventListener(
+    type: 'change',
+    listener: InformeChangeEventListener<TFields> | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: string,
+    listener:
+      | EventListenerOrEventListenerObject
+      | InformeChangeEventListener<TFields>
+      | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(
+      type,
+      listener as EventListenerOrEventListenerObject | null,
+      options,
+    );
+  }
+
+  setFields<TNextFields extends InformeFieldMap>(
+    fields: TNextFields,
+  ): Informe<TNextFields> {
+    const normalized = normalizeInformeFields(fields);
+    const next = this as unknown as Informe<TNextFields>;
+
+    next.entryList = normalized.entries;
+    next.fields = fields;
+    next.schema = normalized.schema;
+    next.editor?.setSchema(normalized.schema);
+    next.editor?.setEntries(normalized.entries);
+
+    return next;
+  }
+
+  setOptions(options: InformeOptions): void {
+    this.options = {
+      debounceMs: options.debounceMs ?? this.options.debounceMs,
+      className: options.className ?? this.options.className,
+    };
+
+    this.editor?.setOptions({
+      debounceMs: this.options.debounceMs,
+    });
+  }
+
+  focus(): void {
+    this.editor?.focus();
+  }
+
+  get size(): number {
+    return this.resolvedKeyOrder().length;
+  }
+
+  get<TKey extends InformeFieldKey<TFields>>(
+    key: TKey,
+  ): InformeResolvedValue<TFields, TKey> | undefined;
+  get(key: string): string | undefined;
+  get(key: string): InformeFieldValue | undefined {
+    return this.resolveLastEnabled(key);
+  }
+
+  getAll<TKey extends InformeFieldKey<TFields>>(
+    key: TKey,
+  ): Array<InformeResolvedValue<TFields, TKey> | undefined>;
+  getAll(key: string): string[];
+  getAll(key: string): Array<InformeFieldValue | undefined> {
+    const values: Array<InformeFieldValue | undefined> = [];
+
+    for (const entry of this.currentEntries()) {
+      if (entry.disabled || entry.key !== key) {
+        continue;
+      }
+
+      values.push(this.resolveEntryValue(entry));
+    }
+
+    return values;
+  }
+
+  has(key: string): boolean {
+    return this.hasEnabledEntry(key);
+  }
+
+  set<TKey extends InformeFieldKey<TFields>>(
+    key: TKey,
+    value: InformeResolvedValue<TFields, TKey>,
+  ): this;
+  set(key: string, value: InformeFieldValue): this;
+  set(key: string, value: InformeFieldValue): this {
+    const entries = this.currentEntries();
+
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+
+      if (!entry.disabled && entry.key === key) {
+        entries[index] = { ...entry, value: String(value) };
+        this.entryList = entries;
+        this.syncEntries();
+        return this;
+      }
+    }
+
+    entries.push({ key, value: String(value) });
+    this.entryList = entries;
+    this.syncEntries();
+    return this;
+  }
+
+  append<TKey extends InformeFieldKey<TFields>>(
+    key: TKey,
+    value: InformeResolvedValue<TFields, TKey>,
+  ): void;
+  append(key: string, value: InformeFieldValue): void;
+  append(key: string, value: InformeFieldValue): void {
+    this.entryList = [...this.currentEntries(), { key, value: String(value) }];
+    this.syncEntries();
+  }
+
+  delete(key: string): void {
+    this.entryList = this.currentEntries().filter((entry) => entry.key !== key);
+    this.syncEntries();
+  }
+
+  clear(): void {
+    this.entryList = [];
+    this.syncEntries();
+  }
+
+  reset(): void {
+    const normalized = normalizeInformeFields(this.fields);
+
+    this.entryList = normalized.entries;
+    this.schema = normalized.schema;
+    this.editor?.setSchema(normalized.schema);
+    this.syncEntries();
+  }
+
+  keys(): IterableIterator<string> {
+    return this.resolvedKeyOrder()[Symbol.iterator]();
+  }
+
+  values(): IterableIterator<InformeFieldValue | undefined> {
+    return this.resolvedValues()[Symbol.iterator]();
+  }
+
+  entries(): IterableIterator<[string, InformeFieldValue | undefined]> {
+    return this.resolvedEntries()[Symbol.iterator]();
+  }
+
+  forEach(
+    callback: (
+      value: InformeFieldValue | undefined,
+      key: string,
+      informe: this,
+    ) => void,
+    thisArg?: unknown,
+  ): void {
+    for (const [key, value] of this.resolvedEntries()) {
+      callback.call(thisArg, value, key, this);
+    }
+  }
+
+  [Symbol.iterator](): IterableIterator<
+    [string, InformeFieldValue | undefined]
+  > {
+    return this.entries();
+  }
+
+  rawEntries(): Entry[] {
+    return this.currentEntries().map((entry) => ({ ...entry }));
+  }
+
+  setRawEntries(entries: readonly Entry[]): void {
+    this.entryList = entries.map((entry) => ({ ...entry }));
+    this.syncEntries();
+  }
+
+  destroy(): void {
+    if (!this.editor) {
+      return;
+    }
+
+    this.entryList = this.editor.getEntries();
+    this.editor.destroy();
+    this.editor = undefined;
+  }
+
+  private resolveLastEnabled(key: string): InformeFieldValue | undefined {
+    const entries = this.currentEntries();
+
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+
+      if (!entry.disabled && entry.key === key) {
+        return this.resolveEntryValue(entry);
+      }
+    }
+
+    return undefined;
+  }
+
+  private resolvedKeyOrder(): string[] {
+    const keys = new Set<string>();
+    const activeKeys = new Set<string>();
+    const entries = this.currentEntries();
+
+    for (const entry of entries) {
+      if (!entry.disabled) {
+        activeKeys.add(entry.key);
+      }
+    }
+
+    for (const entry of entries) {
+      if (activeKeys.has(entry.key)) {
+        keys.add(entry.key);
+      }
+    }
+
+    return [...keys];
+  }
+
+  private resolvedValues(): Array<InformeFieldValue | undefined> {
+    return this.resolvedKeyOrder().map((key) => this.resolveLastEnabled(key));
+  }
+
+  private resolvedEntries(): Array<[string, InformeFieldValue | undefined]> {
+    return this.resolvedKeyOrder().map((key) => [
+      key,
+      this.resolveLastEnabled(key),
+    ]);
+  }
+
+  private resolveEntryValue(entry: Entry): InformeFieldValue | undefined {
+    const descriptor = this.schema[entry.key];
+    const type = descriptor?.type;
+
+    if (type === 'number') {
+      const trimmed = entry.value.trim();
+
+      if (!trimmed) {
+        return undefined;
+      }
+
+      const number = Number(trimmed);
+
+      return Number.isFinite(number) ? number : undefined;
+    }
+
+    return entry.value;
+  }
+
+  private hasEnabledEntry(key: string): boolean {
+    return this.currentEntries().some(
+      (entry) => !entry.disabled && entry.key === key,
+    );
+  }
+
+  private currentEntries(): Entry[] {
+    return (
+      this.editor?.getEntries() ?? this.entryList.map((entry) => ({ ...entry }))
+    );
+  }
+
+  private syncEntries(): void {
+    this.editor?.setEntries(this.entryList);
+    this.dispatchChange();
+  }
+
+  private dispatchChange(): void {
+    this.dispatchEvent(
+      new CustomEvent<InformeChangeDetail<TFields>>('change', {
+        detail: {
+          informe: this,
+        },
+      }),
+    );
+  }
+}

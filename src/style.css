@@ -1,0 +1,166 @@
+@layer informe-editor {
+  .informe-entry-editor {
+    --informe-font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --informe-font-mono: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+    --informe-bg-primary: #ffffff;
+    --informe-bg-secondary: #f4f5f7;
+    --informe-border-color: #e1e4e8;
+    --informe-text-primary: #24292f;
+    --informe-text-secondary: #656d76;
+
+    box-sizing: border-box;
+    border: 1px solid var(--informe-border-color);
+    border-radius: 4px;
+    background: var(--informe-bg-primary);
+    color: var(--informe-text-primary);
+    overflow: hidden;
+  }
+
+  .informe-entry-editor *,
+  .informe-entry-editor *::before,
+  .informe-entry-editor *::after {
+    box-sizing: border-box;
+  }
+
+  .informe-entry-editor .ProseMirror {
+    padding: 4px 0;
+    outline: none;
+    font-family: var(--informe-font-mono);
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+
+  .informe-entry-editor .ProseMirror:focus-within {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+    border-radius: 4px;
+  }
+
+  .informe-entry {
+    display: flex;
+    align-items: baseline;
+    padding: 1px 8px;
+    white-space: pre;
+  }
+
+  .informe-entry-toggle-wrapper {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    margin-right: 4px;
+    user-select: none;
+  }
+
+  .informe-entry-toggle {
+    width: 13px;
+    height: 13px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+  }
+
+  .informe-entry:hover .informe-entry-toggle,
+  .informe-entry--disabled .informe-entry-toggle {
+    opacity: 1;
+  }
+
+  .informe-entry-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .informe-entry--disabled,
+  .informe-entry--overridden {
+    opacity: 0.45;
+    text-decoration: none;
+  }
+
+  .informe-entry--disabled .informe-entry-content {
+    text-decoration: line-through;
+    text-decoration-color: var(--informe-text-secondary);
+  }
+
+  .informe-entry--disabled .informe-entry-toggle {
+    opacity: 1;
+  }
+
+  .informe-entry-key {
+    color: #0550ae;
+  }
+
+  .informe-entry-editor:hover .informe-entry-key--has-info {
+    text-decoration: dotted underline;
+    text-decoration-color: #0550ae;
+    text-underline-offset: 3px;
+  }
+
+  .informe-entry-separator {
+    color: var(--informe-text-secondary);
+  }
+
+  .informe-entry-value {
+    font-family: var(--informe-font-family);
+    color: #0a3069;
+  }
+
+  .informe-entry-key--unknown {
+    color: #bf8700;
+    text-decoration: wavy underline;
+    text-decoration-color: #d4a72c;
+    text-underline-offset: 3px;
+  }
+}
+
+.informe-schema-tooltip {
+  position: fixed;
+  z-index: 10000;
+  display: none;
+  max-width: 240px;
+  padding: 6px 8px;
+  background: #ffffff;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #24292f;
+  pointer-events: none;
+}
+
+.informe-schema-tooltip--visible {
+  display: block;
+}
+
+.informe-schema-tooltip-label {
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+
+.informe-schema-tooltip-description {
+  margin-bottom: 4px;
+}
+
+.informe-schema-tooltip-meta {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+
+.informe-schema-tooltip-tag {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-size: 11px;
+  background: #f4f5f7;
+  color: #656d76;
+}
+
+.informe-schema-tooltip-constraints {
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-size: 11px;
+  color: #656d76;
+}
