@@ -104,6 +104,23 @@
     color: #0a3069;
   }
 
+  .informe-entry-pattern-warning {
+    display: inline-flex;
+    align-items: center;
+    width: 12px;
+    height: 12px;
+    margin-right: 4px;
+    color: #d73a49;
+    vertical-align: -1px;
+    cursor: help;
+  }
+
+  .informe-entry-pattern-warning svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+  }
+
   .informe-entry-key--unknown {
     color: #bf8700;
     text-decoration: wavy underline;
@@ -160,6 +177,76 @@
 }
 
 .informe-schema-tooltip-constraints {
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-size: 11px;
+  color: #656d76;
+}
+
+.informe-schema-typeahead {
+  position: fixed;
+  z-index: 10001;
+  display: none;
+  min-width: 220px;
+  max-width: 360px;
+  max-height: 240px;
+  padding: 4px;
+  overflow-y: auto;
+  scroll-padding: 4px;
+  background: #ffffff;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #24292f;
+}
+
+.informe-schema-typeahead--visible {
+  display: block;
+}
+
+.informe-schema-typeahead-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.informe-schema-typeahead-item--active,
+.informe-schema-typeahead-item:hover {
+  background: #f4f5f7;
+}
+
+.informe-schema-typeahead-header {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.informe-schema-typeahead-key {
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-weight: 600;
+  color: #0550ae;
+}
+
+.informe-schema-typeahead-label {
+  color: #656d76;
+}
+
+.informe-schema-typeahead-description {
+  margin-top: 2px;
+  color: #24292f;
+}
+
+.informe-schema-typeahead-meta {
+  margin-top: 2px;
   font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
   font-size: 11px;
   color: #656d76;

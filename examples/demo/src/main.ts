@@ -6,6 +6,15 @@ const fields = {
   name: input({ label: 'Full name', default: 'Bob', required: true }),
   age: input({ type: 'number', default: 50, min: 1, max: 99 }),
   food: input({ description: 'What is your favorite food?' }),
+  email: input({
+    label: 'Email address',
+    description: 'Where should we send updates?',
+    pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+  }),
+  color: input({
+    label: 'Favorite color',
+    description: 'A CSS color name or hex value.',
+  }),
 };
 
 const editorElement = document.querySelector<HTMLElement>('#editor');

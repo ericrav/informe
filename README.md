@@ -34,6 +34,11 @@ const informe = new Informe({
 })
 ```
 
+When editing, Informe suggests known schema keys while the cursor is in the key
+position before `:`. Empty lines show all keys, typed text filters the list, and
+descriptions from `input({description})` appear in the typeahead. Press `Tab` or
+`Enter` to insert the selected key as `key: ` and start typing its value.
+
 `Informe` exposes a `Map`/`FormData`-shaped API over the entries:
 
 ```ts

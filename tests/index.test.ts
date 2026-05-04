@@ -1,5 +1,10 @@
 import {expect, test} from 'vitest'
 import {Informe, input, parseEntryText} from '../src'
+import {
+  getSchemaKeySuggestions,
+  getSchemaKeyTypeaheadMatch,
+  isPatternValid,
+} from '../src/editor'
 
 test('parses key/value entry text', () => {
   expect(parseEntryText('caption: Hello world')).toEqual({
@@ -13,6 +18,78 @@ test('parses key-only entry text', () => {
     key: 'disabled',
     value: '',
   })
+})
+
+test('detects typeahead key replacement ranges before a separator exists', () => {
+  expect(getSchemaKeyTypeaheadMatch('fo', 2)).toEqual({
+    query: 'fo',
+    keyText: 'fo',
+    replaceFromOffset: 0,
+    replaceToOffset: 2,
+  })
+
+  expect(getSchemaKeyTypeaheadMatch('fo: Pizza', 2)).toBeUndefined()
+  expect(getSchemaKeyTypeaheadMatch('food: Pizza', 6)).toBeUndefined()
+})
+
+test('filters schema key suggestions by key and label', () => {
+  const suggestions = getSchemaKeySuggestions(
+    {
+      name: {label: 'Full name', description: 'What should we call you?'},
+      food: {description: 'What is your favorite food?'},
+      email: {required: true},
+      contact: {label: 'Email address'},
+    },
+    'em',
+  )
+
+  expect(suggestions).toEqual([
+    {
+      key: 'email',
+      label: undefined,
+      description: undefined,
+      type: undefined,
+      required: true,
+    },
+    {
+      key: 'contact',
+      label: 'Email address',
+      description: undefined,
+      type: undefined,
+      required: false,
+    },
+  ])
+})
+
+test('excludes existing keys only before the user has typed a query', () => {
+  const schema = {
+    name: {},
+    age: {},
+    food: {},
+  }
+  const existingKeys = new Set(['name', 'age'])
+
+  expect(
+    getSchemaKeySuggestions(schema, '', {
+      excludeKeysWhenQueryEmpty: existingKeys,
+    }).map(({key}) => key),
+  ).toEqual(['food'])
+
+  expect(
+    getSchemaKeySuggestions(schema, 'a', {
+      excludeKeysWhenQueryEmpty: existingKeys,
+    }).map(({key}) => key),
+  ).toEqual(['age', 'name'])
+})
+
+test('validates string values against descriptor patterns', () => {
+  expect(isPatternValid('', {type: 'string', pattern: 'foo'})).toBe(false)
+  expect(isPatternValid('   ', {type: 'string', pattern: 'foo'})).toBe(false)
+  expect(isPatternValid('foobar', {type: 'string', pattern: 'foo'})).toBe(false)
+  expect(isPatternValid('foo', {type: 'string', pattern: 'foo'})).toBe(true)
+  expect(isPatternValid('xfooy', {type: 'string', pattern: /foo/})).toBe(true)
+  expect(isPatternValid('foo', {type: 'number', pattern: 'bar'})).toBe(true)
+  expect(isPatternValid('foo', {type: 'string'})).toBe(true)
 })
 
 test('input infers descriptor type from the default', () => {
