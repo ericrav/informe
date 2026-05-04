@@ -274,3 +274,17 @@
   margin-left: auto;
   color: #656d76;
 }
+
+.informe-schema-typeahead-option-primary {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--informe-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.informe-schema-typeahead-value-secondary {
+  font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, monospace;
+  font-size: 11px;
+}

@@ -14,7 +14,12 @@ import {
 } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { history, redo, undo } from 'prosemirror-history';
-import type { Entry, SchemaDescriptor, SchemaDescriptorMap } from './input';
+import type {
+  Entry,
+  InputOption,
+  SchemaDescriptor,
+  SchemaDescriptorMap,
+} from './input';
 
 export type EntryChangeHandler = (
   entries: Entry[],
@@ -475,6 +480,113 @@ function schemaKeySuggestionRank(
   return undefined;
 }
 
+export interface SchemaValueTypeaheadMatch {
+  query: string;
+  replaceFromOffset: number;
+  replaceToOffset: number;
+}
+
+export interface SchemaValueSuggestion {
+  label?: string;
+  value: string;
+}
+
+export function getSchemaValueTypeaheadMatch(
+  text: string,
+  cursorOffset: number,
+): SchemaValueTypeaheadMatch | undefined {
+  if (cursorOffset < 0 || cursorOffset > text.length) {
+    return undefined;
+  }
+
+  const colonIndex = text.indexOf(':');
+
+  if (colonIndex === -1 || cursorOffset <= colonIndex + 1) {
+    return undefined;
+  }
+
+  const valueStart = colonIndex + 1;
+  const rawValue = text.slice(valueStart);
+  const trimmedStart = rawValue.length - rawValue.trimStart().length;
+
+  return {
+    query: text.slice(valueStart, cursorOffset).trimStart(),
+    replaceFromOffset: valueStart + trimmedStart,
+    replaceToOffset: text.length,
+  };
+}
+
+function normalizeInputOption(option: string | InputOption): SchemaValueSuggestion {
+  if (typeof option === 'string') {
+    return { value: option };
+  }
+
+  return { label: option.label, value: option.value };
+}
+
+function schemaValueSuggestionRank(
+  suggestion: SchemaValueSuggestion,
+  query: string,
+): number | undefined {
+  if (!query) {
+    return 0;
+  }
+
+  const value = suggestion.value.toLowerCase();
+  const label = suggestion.label?.toLowerCase();
+
+  if (value.startsWith(query)) {
+    return 0;
+  }
+
+  if (label?.startsWith(query)) {
+    return 1;
+  }
+
+  if (value.includes(query)) {
+    return 2;
+  }
+
+  if (label?.includes(query)) {
+    return 3;
+  }
+
+  return undefined;
+}
+
+export function getSchemaValueSuggestions(
+  descriptor: SchemaDescriptor,
+  query: string,
+): SchemaValueSuggestion[] {
+  const options = descriptor.options;
+
+  if (!options || options.length === 0) {
+    return [];
+  }
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const suggestions: Array<{
+    index: number;
+    rank: number;
+    suggestion: SchemaValueSuggestion;
+  }> = [];
+
+  for (const [index, option] of options.entries()) {
+    const suggestion = normalizeInputOption(option);
+    const rank = schemaValueSuggestionRank(suggestion, normalizedQuery);
+
+    if (rank != null) {
+      suggestions.push({ index, rank, suggestion });
+    }
+  }
+
+  suggestions.sort((left, right) => {
+    return left.rank - right.rank || left.index - right.index;
+  });
+
+  return suggestions.map(({ suggestion }) => suggestion);
+}
+
 interface ActiveSchemaKeyTypeahead extends SchemaKeyTypeaheadMatch {
   from: number;
   to: number;
@@ -791,6 +903,10 @@ class SchemaKeyTypeaheadView {
       return;
     }
 
+    const descriptor = this.schemaRef.current[suggestion.key];
+    const hasOptions =
+      descriptor?.options != null && descriptor.options.length > 0;
+
     const replacement = `${suggestion.key}: `;
     const position = this.active.from + replacement.length;
     const transaction = this.view.state.tr.insertText(
@@ -800,6 +916,11 @@ class SchemaKeyTypeaheadView {
     );
 
     transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
+
+    if (hasOptions) {
+      transaction.setMeta(schemaValueTypeaheadKey, { openRequested: true });
+    }
+
     this.view.dispatch(transaction.scrollIntoView());
     this.view.focus();
   }
@@ -987,6 +1108,468 @@ function schemaKeyTypeaheadPlugin(schemaRef: {
           typeaheadView?.update(
             updatedView,
             schemaKeyTypeaheadKey.getState(updatedView.state)
+              ?? inactiveSchemaKeyTypeaheadState,
+          );
+        },
+        destroy() {
+          typeaheadView?.destroy();
+          typeaheadView = undefined;
+        },
+      };
+    },
+  });
+}
+
+export const schemaValueTypeaheadKey = new PluginKey<SchemaKeyTypeaheadPluginState>(
+  'schemaValueTypeahead',
+);
+
+interface ActiveSchemaValueTypeahead extends SchemaValueTypeaheadMatch {
+  from: number;
+  to: number;
+  anchor: number;
+  key: string;
+  signature: string;
+  suggestions: SchemaValueSuggestion[];
+}
+
+function getActiveSchemaValueTypeahead(
+  state: EditorState,
+  schema: SchemaDescriptorMap,
+): ActiveSchemaValueTypeahead | undefined {
+  if (!state.selection.empty) {
+    return undefined;
+  }
+
+  const { $from } = state.selection;
+
+  if ($from.parent.type !== entrySchema.nodes.entry) {
+    return undefined;
+  }
+
+  const text = $from.parent.textContent;
+  const match = getSchemaValueTypeaheadMatch(text, $from.parentOffset);
+
+  if (!match) {
+    return undefined;
+  }
+
+  const colonIndex = text.indexOf(':');
+  const key = text.slice(0, colonIndex).trim();
+  const descriptor = key ? schema[key] : undefined;
+
+  if (!descriptor || !descriptor.options || descriptor.options.length === 0) {
+    return undefined;
+  }
+
+  const suggestions = getSchemaValueSuggestions(descriptor, match.query);
+
+  if (suggestions.length === 0) {
+    return undefined;
+  }
+
+  const normalizedQuery = match.query.toLowerCase();
+  const isExactMatch = suggestions.some(
+    (s) => s.value.toLowerCase() === normalizedQuery,
+  );
+
+  if (isExactMatch) {
+    return undefined;
+  }
+
+  const entryStart = $from.start();
+  const from = entryStart + match.replaceFromOffset;
+  const to = entryStart + match.replaceToOffset;
+
+  return {
+    ...match,
+    from,
+    to,
+    key,
+    anchor: state.selection.from,
+    suggestions,
+    signature: [
+      from,
+      to,
+      state.selection.from,
+      match.query,
+      suggestions.map(({ value }) => value).join('\0'),
+    ].join(':'),
+  };
+}
+
+let schemaValueTypeaheadInstanceCounter = 0;
+
+class SchemaValueTypeaheadView {
+  private readonly element: HTMLDivElement;
+  private readonly listElement: HTMLDivElement;
+  private active: ActiveSchemaValueTypeahead | undefined;
+  private dismissedSignature: string | undefined;
+  private openRequest = inactiveSchemaKeyTypeaheadState;
+  private selectedIndex = 0;
+  private view: EditorView;
+
+  constructor(
+    view: EditorView,
+    private readonly schemaRef: { current: SchemaDescriptorMap },
+  ) {
+    this.view = view;
+    schemaValueTypeaheadInstanceCounter += 1;
+
+    this.element = document.createElement('div');
+    this.element.className = 'informe-schema-typeahead';
+
+    this.listElement = document.createElement('div');
+    this.listElement.className = 'informe-schema-typeahead-list';
+    this.listElement.setAttribute('role', 'listbox');
+
+    this.element.append(this.listElement);
+    this.element.addEventListener('mousedown', this.handleMouseDown);
+    this.element.addEventListener('mouseover', this.handleMouseOver);
+    document.body.append(this.element);
+    this.update(view, inactiveSchemaKeyTypeaheadState);
+  }
+
+  update(view: EditorView, openRequest: SchemaKeyTypeaheadPluginState): void {
+    this.view = view;
+    const shouldOpen =
+      openRequest.openRequested || this.openRequest.openRequested;
+
+    this.openRequest = inactiveSchemaKeyTypeaheadState;
+    const next = getActiveSchemaValueTypeahead(view.state, this.schemaRef.current);
+
+    if (!next || !view.hasFocus() || (!this.active && !shouldOpen)) {
+      this.active = undefined;
+      this.hide();
+      return;
+    }
+
+    if (
+      this.dismissedSignature &&
+      this.dismissedSignature !== next.signature
+    ) {
+      this.dismissedSignature = undefined;
+    }
+
+    if (this.dismissedSignature === next.signature) {
+      this.active = undefined;
+      this.hide();
+      return;
+    }
+
+    if (this.active?.signature !== next.signature) {
+      this.selectedIndex = 0;
+    }
+
+    this.active = next;
+    this.selectedIndex = Math.min(
+      this.selectedIndex,
+      next.suggestions.length - 1,
+    );
+    this.render();
+  }
+
+  destroy(): void {
+    this.element.removeEventListener('mousedown', this.handleMouseDown);
+    this.element.removeEventListener('mouseover', this.handleMouseOver);
+    this.element.remove();
+  }
+
+  hide(): void {
+    this.element.classList.remove('informe-schema-typeahead--visible');
+    this.listElement.replaceChildren();
+  }
+
+  close(): void {
+    this.active = undefined;
+    this.hide();
+  }
+
+  handleKeyDown(event: KeyboardEvent): boolean {
+    if (!this.active) {
+      return false;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.selectedIndex =
+        (this.selectedIndex + 1) % this.active.suggestions.length;
+      this.render();
+      this.scrollSelectedListItemIntoView();
+      return true;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      this.selectedIndex =
+        (this.selectedIndex - 1 + this.active.suggestions.length) %
+        this.active.suggestions.length;
+      this.render();
+      this.scrollSelectedListItemIntoView();
+      return true;
+    }
+
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      this.acceptSelectedSuggestion();
+      return true;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.dismissedSignature = this.active.signature;
+      this.active = undefined;
+      this.hide();
+      return true;
+    }
+
+    return false;
+  }
+
+  requestOpenAfterTextInput(text: string): void {
+    if (!text.includes(':') && !this.isInValuePosition()) {
+      return;
+    }
+
+    const { state } = this.view;
+
+    if (!state.selection.empty) {
+      return;
+    }
+
+    const { $from } = state.selection;
+
+    if ($from.parent.type !== entrySchema.nodes.entry) {
+      return;
+    }
+
+    if (getSchemaValueTypeaheadMatch($from.parent.textContent, $from.parentOffset)) {
+      this.openRequest = {
+        openRequested: true,
+        excludeExistingKeysWhenEmpty: false,
+      };
+    }
+  }
+
+  private isInValuePosition(): boolean {
+    const { state } = this.view;
+
+    if (!state.selection.empty) {
+      return false;
+    }
+
+    const { $from } = state.selection;
+
+    if ($from.parent.type !== entrySchema.nodes.entry) {
+      return false;
+    }
+
+    return getSchemaValueTypeaheadMatch($from.parent.textContent, $from.parentOffset) != null;
+  }
+
+  private readonly handleMouseDown = (event: MouseEvent) => {
+    const item = (event.target as HTMLElement).closest(
+      '[data-informe-schema-typeahead-index]',
+    ) as HTMLElement | null;
+
+    if (!item || !this.active) {
+      return;
+    }
+
+    event.preventDefault();
+    this.selectedIndex = Number(item.dataset.informeSchemaTypeaheadIndex);
+    this.acceptSelectedSuggestion();
+  };
+
+  private readonly handleMouseOver = (event: MouseEvent) => {
+    const item = (event.target as HTMLElement).closest(
+      '[data-informe-schema-typeahead-index]',
+    ) as HTMLElement | null;
+
+    if (!item || !this.active) {
+      return;
+    }
+
+    const index = Number(item.dataset.informeSchemaTypeaheadIndex);
+
+    if (Number.isNaN(index) || index === this.selectedIndex) {
+      return;
+    }
+
+    this.selectedIndex = index;
+    this.render();
+  };
+
+  private acceptSelectedSuggestion(): void {
+    if (!this.active) {
+      return;
+    }
+
+    const suggestion = this.active.suggestions[this.selectedIndex];
+
+    if (!suggestion) {
+      return;
+    }
+
+    const position = this.active.from + suggestion.value.length;
+    const transaction = this.view.state.tr.insertText(
+      suggestion.value,
+      this.active.from,
+      this.active.to,
+    );
+
+    transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
+    this.view.dispatch(transaction.scrollIntoView());
+    this.view.focus();
+  }
+
+  private render(): void {
+    if (!this.active) {
+      this.hide();
+      return;
+    }
+
+    this.listElement.replaceChildren(
+      ...this.active.suggestions.map((suggestion, index) =>
+        this.renderListItem(suggestion, index),
+      ),
+    );
+    this.position();
+  }
+
+  private position(): void {
+    if (!this.active) {
+      return;
+    }
+
+    try {
+      const rect = this.view.coordsAtPos(this.active.anchor);
+      this.element.classList.add('informe-schema-typeahead--visible');
+      this.element.style.top = `${rect.bottom + 4}px`;
+      this.element.style.left = `${rect.left}px`;
+
+      const margin = 8;
+      const popupWidth = this.element.offsetWidth;
+      const maxLeft = window.innerWidth - popupWidth - margin;
+
+      if (rect.left > maxLeft) {
+        this.element.style.left = `${Math.max(margin, maxLeft)}px`;
+      }
+    } catch {
+      this.hide();
+    }
+  }
+
+  private scrollSelectedListItemIntoView(): void {
+    const selectedItem = this.listElement.querySelector<HTMLElement>(
+      `[data-informe-schema-typeahead-index="${this.selectedIndex}"]`,
+    );
+
+    if (!selectedItem) {
+      return;
+    }
+
+    const itemTop = selectedItem.offsetTop;
+    const itemBottom = itemTop + selectedItem.offsetHeight;
+    const style = getComputedStyle(this.listElement);
+    const scrollPaddingTop = cssPixelValue(style.scrollPaddingTop);
+    const scrollPaddingBottom = cssPixelValue(style.scrollPaddingBottom);
+    const visibleTop = this.listElement.scrollTop + scrollPaddingTop;
+    const visibleBottom =
+      this.listElement.scrollTop +
+      this.listElement.clientHeight -
+      scrollPaddingBottom;
+
+    if (itemTop < visibleTop) {
+      this.listElement.scrollTop = itemTop - scrollPaddingTop;
+    } else if (itemBottom > visibleBottom) {
+      this.listElement.scrollTop =
+        itemBottom - this.listElement.clientHeight + scrollPaddingBottom;
+    }
+  }
+
+  private renderListItem(
+    suggestion: SchemaValueSuggestion,
+    index: number,
+  ): HTMLElement {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className =
+      index === this.selectedIndex
+        ? 'informe-schema-typeahead-item informe-schema-typeahead-item--active'
+        : 'informe-schema-typeahead-item';
+    item.dataset.informeSchemaTypeaheadIndex = String(index);
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', String(index === this.selectedIndex));
+
+    const primaryText = suggestion.label ?? suggestion.value;
+    const primary = document.createElement('span');
+    primary.className = 'informe-schema-typeahead-option-primary';
+    primary.textContent = primaryText;
+    item.append(primary);
+
+    if (suggestion.label && suggestion.label !== suggestion.value) {
+      const secondary = document.createElement('span');
+      secondary.className = 'informe-schema-typeahead-label informe-schema-typeahead-value-secondary';
+      secondary.textContent = suggestion.value;
+      item.append(secondary);
+    }
+
+    return item;
+  }
+}
+
+function schemaValueTypeaheadPlugin(schemaRef: {
+  current: SchemaDescriptorMap;
+}): Plugin {
+  let typeaheadView: SchemaValueTypeaheadView | undefined;
+
+  return new Plugin({
+    key: schemaValueTypeaheadKey,
+    state: {
+      init() {
+        return inactiveSchemaKeyTypeaheadState;
+      },
+      apply(transaction) {
+        const meta = transaction.getMeta(schemaValueTypeaheadKey);
+
+        if (meta?.openRequested !== true) {
+          return inactiveSchemaKeyTypeaheadState;
+        }
+
+        return {
+          openRequested: true,
+          excludeExistingKeysWhenEmpty: false,
+        };
+      },
+    },
+    props: {
+      handleKeyDown(_, event) {
+        return typeaheadView?.handleKeyDown(event) ?? false;
+      },
+      handleTextInput(_, __, ___, text) {
+        typeaheadView?.requestOpenAfterTextInput(text);
+        return false;
+      },
+      handleDOMEvents: {
+        blur() {
+          typeaheadView?.close();
+          return false;
+        },
+        focus(view) {
+          typeaheadView?.update(view, inactiveSchemaKeyTypeaheadState);
+          return false;
+        },
+      },
+    },
+    view(view) {
+      typeaheadView = new SchemaValueTypeaheadView(view, schemaRef);
+
+      return {
+        update(updatedView) {
+          typeaheadView?.update(
+            updatedView,
+            schemaValueTypeaheadKey.getState(updatedView.state)
               ?? inactiveSchemaKeyTypeaheadState,
           );
         },
@@ -1282,6 +1865,7 @@ export class EntryEditor {
         history(),
         schemaHintsPlugin(this.schemaRef),
         schemaKeyTypeaheadPlugin(this.schemaRef),
+        schemaValueTypeaheadPlugin(this.schemaRef),
         keymap({
           Enter: insertEntry,
           Backspace: deleteEmptyEntry,

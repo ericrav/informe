@@ -3,6 +3,8 @@ import {Informe, input, parseEntryText} from '../src'
 import {
   getSchemaKeySuggestions,
   getSchemaKeyTypeaheadMatch,
+  getSchemaValueSuggestions,
+  getSchemaValueTypeaheadMatch,
   isPatternValid,
 } from '../src/editor'
 
@@ -313,4 +315,83 @@ test('Informe forEach visits unique resolved entries with the instance', () => {
     ['name', 'Alice', true],
     ['unknown', 'kept', true],
   ])
+})
+
+test('detects value typeahead match when cursor is past the colon', () => {
+  expect(getSchemaValueTypeaheadMatch('color: red', 10)).toEqual({
+    query: 'red',
+    replaceFromOffset: 7,
+    replaceToOffset: 10,
+  })
+
+  expect(getSchemaValueTypeaheadMatch('color: re', 9)).toEqual({
+    query: 're',
+    replaceFromOffset: 7,
+    replaceToOffset: 9,
+  })
+
+  expect(getSchemaValueTypeaheadMatch('color: ', 7)).toEqual({
+    query: '',
+    replaceFromOffset: 7,
+    replaceToOffset: 7,
+  })
+})
+
+test('returns undefined for value typeahead match when there is no colon or cursor is before/at separator', () => {
+  expect(getSchemaValueTypeaheadMatch('color', 5)).toBeUndefined()
+  expect(getSchemaValueTypeaheadMatch('color: red', 3)).toBeUndefined()
+  // cursor on the space separator (colonIndex+1) is not a value position
+  expect(getSchemaValueTypeaheadMatch('color: red', 6)).toBeUndefined()
+})
+
+test('filters value suggestions by value and label', () => {
+  const descriptor = {
+    options: [
+      {label: 'Red', value: '#FF0000'},
+      {label: 'Green', value: '#00AA00'},
+      {label: 'Blue', value: '#0000FF'},
+    ],
+  }
+
+  expect(getSchemaValueSuggestions(descriptor, 'g')).toEqual([
+    {label: 'Green', value: '#00AA00'},
+  ])
+
+  expect(getSchemaValueSuggestions(descriptor, 're')).toEqual([
+    {label: 'Red', value: '#FF0000'},
+    {label: 'Green', value: '#00AA00'},
+  ])
+
+  expect(getSchemaValueSuggestions(descriptor, '')).toEqual([
+    {label: 'Red', value: '#FF0000'},
+    {label: 'Green', value: '#00AA00'},
+    {label: 'Blue', value: '#0000FF'},
+  ])
+})
+
+test('filters value suggestions for string options', () => {
+  const descriptor = {options: ['red', 'green', 'blue']}
+
+  // 'bl' prefix-matches 'blue' only
+  expect(getSchemaValueSuggestions(descriptor, 'bl')).toEqual([
+    {value: 'blue'},
+  ])
+
+  expect(getSchemaValueSuggestions(descriptor, 'xyz')).toEqual([])
+
+  expect(getSchemaValueSuggestions(descriptor, '')).toEqual([
+    {value: 'red'},
+    {value: 'green'},
+    {value: 'blue'},
+  ])
+})
+
+test('returns empty suggestions for descriptor without options', () => {
+  expect(getSchemaValueSuggestions({}, 'red')).toEqual([])
+  expect(getSchemaValueSuggestions({options: []}, '')).toEqual([])
+})
+
+test('input rejects options on type: number at the type level', () => {
+  // @ts-expect-error options is not allowed on number inputs
+  input({type: 'number', options: ['1', '2', '3']})
 })

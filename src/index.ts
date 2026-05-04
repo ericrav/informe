@@ -7,6 +7,8 @@ export type {
   InformeInputType,
   InformeValue,
   InputDescriptor,
+  InputOption,
+  InputOptionList,
   InputOptions,
   SchemaDescriptor,
   SchemaDescriptorMap,

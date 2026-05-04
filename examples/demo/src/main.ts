@@ -14,6 +14,13 @@ const fields = {
   color: input({
     label: 'Favorite color',
     description: 'A CSS color name or hex value.',
+    options: [
+      { label: 'Red', value: '#FF0000' },
+      { label: 'Green', value: '#00AA00' },
+      { label: 'Blue', value: '#0000FF' },
+      { label: 'Orange', value: '#FF8C00' },
+      { label: 'Purple', value: '#7B2FBE' },
+    ],
   }),
 };
 

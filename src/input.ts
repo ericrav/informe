@@ -8,6 +8,13 @@ export interface Entry {
 export type InformeInputType = 'string' | 'number';
 export type InformeFieldValue = string | number;
 
+export interface InputOption {
+  label: string;
+  value: string;
+}
+
+export type InputOptionList = Array<string | InputOption>;
+
 export interface SchemaDescriptor {
   type?: InformeInputType | string;
   label?: string;
@@ -21,6 +28,7 @@ export interface SchemaDescriptor {
   pattern?: string | RegExp;
   default?: unknown;
   placeholder?: string;
+  options?: InputOptionList;
   [key: string]: unknown;
 }
 
@@ -33,6 +41,7 @@ export interface InputOptions<
 > extends SchemaDescriptor {
   type?: InformeInputType;
   default?: TValue;
+  options?: InputOptionList;
 }
 
 export interface InputDescriptor<
@@ -79,7 +88,8 @@ export interface NormalizedFields {
 }
 
 export function input<const TOptions extends InputOptions>(
-  options: TOptions,
+  options: TOptions &
+    (TOptions extends { type: 'number' } ? { options?: never } : unknown),
 ): InputDescriptor<
   TOptions extends { default: infer TValue extends InformeFieldValue }
     ? WidenFieldValue<TValue>
