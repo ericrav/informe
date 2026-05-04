@@ -559,8 +559,13 @@ function getEntryKeys(doc: ProseMirrorNode): ReadonlySet<string> {
   return keys;
 }
 
+let schemaKeyTypeaheadInstanceCounter = 0;
+
 class SchemaKeyTypeaheadView {
   private readonly element: HTMLDivElement;
+  private readonly listElement: HTMLDivElement;
+  private readonly detailsElement: HTMLDivElement;
+  private readonly detailsId: string;
   private active: ActiveSchemaKeyTypeahead | undefined;
   private dismissedSignature: string | undefined;
   private openRequest = inactiveSchemaKeyTypeaheadState;
@@ -573,10 +578,24 @@ class SchemaKeyTypeaheadView {
     private readonly schemaRef: { current: SchemaDescriptorMap },
   ) {
     this.view = view;
+    schemaKeyTypeaheadInstanceCounter += 1;
+    this.detailsId = `informe-schema-typeahead-details-${schemaKeyTypeaheadInstanceCounter}`;
+
     this.element = document.createElement('div');
     this.element.className = 'informe-schema-typeahead';
-    this.element.setAttribute('role', 'listbox');
+
+    this.listElement = document.createElement('div');
+    this.listElement.className = 'informe-schema-typeahead-list';
+    this.listElement.setAttribute('role', 'listbox');
+
+    this.detailsElement = document.createElement('div');
+    this.detailsElement.className = 'informe-schema-typeahead-details';
+    this.detailsElement.id = this.detailsId;
+    this.detailsElement.setAttribute('role', 'tooltip');
+
+    this.element.append(this.listElement, this.detailsElement);
     this.element.addEventListener('mousedown', this.handleMouseDown);
+    this.element.addEventListener('mouseover', this.handleMouseOver);
     document.body.append(this.element);
     this.update(view, inactiveSchemaKeyTypeaheadState);
   }
@@ -641,12 +660,17 @@ class SchemaKeyTypeaheadView {
 
   destroy(): void {
     this.element.removeEventListener('mousedown', this.handleMouseDown);
+    this.element.removeEventListener('mouseover', this.handleMouseOver);
     this.element.remove();
   }
 
   hide(): void {
     this.element.classList.remove('informe-schema-typeahead--visible');
-    this.element.replaceChildren();
+    this.listElement.replaceChildren();
+    this.detailsElement.replaceChildren();
+    this.detailsElement.classList.remove(
+      'informe-schema-typeahead-details--visible',
+    );
   }
 
   close(): void {
@@ -665,6 +689,7 @@ class SchemaKeyTypeaheadView {
       this.selectedIndex =
         (this.selectedIndex + 1) % this.active.suggestions.length;
       this.render();
+      this.scrollSelectedListItemIntoView();
       return true;
     }
 
@@ -674,6 +699,7 @@ class SchemaKeyTypeaheadView {
         (this.selectedIndex - 1 + this.active.suggestions.length) %
         this.active.suggestions.length;
       this.render();
+      this.scrollSelectedListItemIntoView();
       return true;
     }
 
@@ -735,6 +761,25 @@ class SchemaKeyTypeaheadView {
     this.acceptSelectedSuggestion();
   };
 
+  private readonly handleMouseOver = (event: MouseEvent) => {
+    const item = (event.target as HTMLElement).closest(
+      '[data-informe-schema-typeahead-index]',
+    ) as HTMLElement | null;
+
+    if (!item || !this.active) {
+      return;
+    }
+
+    const index = Number(item.dataset.informeSchemaTypeaheadIndex);
+
+    if (Number.isNaN(index) || index === this.selectedIndex) {
+      return;
+    }
+
+    this.selectedIndex = index;
+    this.render();
+  };
+
   private acceptSelectedSuggestion(): void {
     if (!this.active) {
       return;
@@ -765,25 +810,60 @@ class SchemaKeyTypeaheadView {
       return;
     }
 
-    this.element.replaceChildren(
+    this.listElement.replaceChildren(
       ...this.active.suggestions.map((suggestion, index) =>
-        this.renderSuggestion(suggestion, index),
+        this.renderListItem(suggestion, index),
       ),
     );
+    this.renderDetails();
+    this.position();
+  }
+
+  private renderDetails(): void {
+    const suggestion = this.active?.suggestions[this.selectedIndex];
+    const descriptor = suggestion
+      ? this.schemaRef.current[suggestion.key]
+      : undefined;
+
+    if (!descriptor || !hasTooltipContent(descriptor)) {
+      this.detailsElement.replaceChildren();
+      this.detailsElement.classList.remove(
+        'informe-schema-typeahead-details--visible',
+      );
+      return;
+    }
+
+    this.detailsElement.replaceChildren(...buildSchemaDetailNodes(descriptor));
+    this.detailsElement.classList.add(
+      'informe-schema-typeahead-details--visible',
+    );
+  }
+
+  private position(): void {
+    if (!this.active) {
+      return;
+    }
 
     try {
       const rect = this.view.coordsAtPos(this.active.anchor);
-      this.element.style.left = `${rect.left}px`;
-      this.element.style.top = `${rect.bottom + 4}px`;
       this.element.classList.add('informe-schema-typeahead--visible');
-      this.scrollSelectedSuggestionIntoView();
+      this.element.style.top = `${rect.bottom + 4}px`;
+      this.element.style.left = `${rect.left}px`;
+
+      const margin = 8;
+      const popupWidth = this.element.offsetWidth;
+      const maxLeft = window.innerWidth - popupWidth - margin;
+
+      if (rect.left > maxLeft) {
+        this.element.style.left = `${Math.max(margin, maxLeft)}px`;
+      }
     } catch {
       this.hide();
     }
   }
 
-  private scrollSelectedSuggestionIntoView(): void {
-    const selectedItem = this.element.querySelector<HTMLElement>(
+  private scrollSelectedListItemIntoView(): void {
+    const selectedItem = this.listElement.querySelector<HTMLElement>(
       `[data-informe-schema-typeahead-index="${this.selectedIndex}"]`,
     );
 
@@ -793,22 +873,24 @@ class SchemaKeyTypeaheadView {
 
     const itemTop = selectedItem.offsetTop;
     const itemBottom = itemTop + selectedItem.offsetHeight;
-    const style = getComputedStyle(this.element);
+    const style = getComputedStyle(this.listElement);
     const scrollPaddingTop = cssPixelValue(style.scrollPaddingTop);
     const scrollPaddingBottom = cssPixelValue(style.scrollPaddingBottom);
-    const visibleTop = this.element.scrollTop + scrollPaddingTop;
+    const visibleTop = this.listElement.scrollTop + scrollPaddingTop;
     const visibleBottom =
-      this.element.scrollTop + this.element.clientHeight - scrollPaddingBottom;
+      this.listElement.scrollTop +
+      this.listElement.clientHeight -
+      scrollPaddingBottom;
 
     if (itemTop < visibleTop) {
-      this.element.scrollTop = itemTop - scrollPaddingTop;
+      this.listElement.scrollTop = itemTop - scrollPaddingTop;
     } else if (itemBottom > visibleBottom) {
-      this.element.scrollTop =
-        itemBottom - this.element.clientHeight + scrollPaddingBottom;
+      this.listElement.scrollTop =
+        itemBottom - this.listElement.clientHeight + scrollPaddingBottom;
     }
   }
 
-  private renderSuggestion(
+  private renderListItem(
     suggestion: SchemaKeySuggestion,
     index: number,
   ): HTMLElement {
@@ -821,48 +903,30 @@ class SchemaKeyTypeaheadView {
     item.dataset.informeSchemaTypeaheadIndex = String(index);
     item.setAttribute('role', 'option');
     item.setAttribute('aria-selected', String(index === this.selectedIndex));
-
-    const header = document.createElement('div');
-    header.className = 'informe-schema-typeahead-header';
+    item.setAttribute('aria-describedby', this.detailsId);
 
     const key = document.createElement('span');
     key.className = 'informe-schema-typeahead-key';
     key.textContent = suggestion.key;
-    header.append(key);
+    item.append(key);
 
     if (suggestion.label && suggestion.label !== suggestion.key) {
       const label = document.createElement('span');
       label.className = 'informe-schema-typeahead-label';
       label.textContent = suggestion.label;
-      header.append(label);
+      item.append(label);
     }
 
-    item.append(header);
-
-    if (suggestion.description) {
-      const description = document.createElement('div');
-      description.className = 'informe-schema-typeahead-description';
-      description.textContent = suggestion.description;
-      item.append(description);
-    }
-
-    const meta = schemaKeySuggestionMeta(suggestion);
-
-    if (meta) {
-      const metaElement = document.createElement('div');
-      metaElement.className = 'informe-schema-typeahead-meta';
-      metaElement.textContent = meta;
-      item.append(metaElement);
+    if (suggestion.required) {
+      const required = document.createElement('span');
+      required.className = 'informe-schema-typeahead-required';
+      required.setAttribute('aria-label', 'required');
+      required.textContent = '*';
+      item.append(required);
     }
 
     return item;
   }
-}
-
-function schemaKeySuggestionMeta(suggestion: SchemaKeySuggestion): string {
-  return [suggestion.type, suggestion.required ? 'required' : undefined]
-    .filter(Boolean)
-    .join(', ');
 }
 
 function cssPixelValue(value: string): number {
@@ -1102,35 +1166,45 @@ function createEntryNodeView(
   };
 }
 
-function buildTooltipContent(descriptor: SchemaDescriptor): string {
-  const parts: string[] = [];
+function buildSchemaDetailNodes(descriptor: SchemaDescriptor): HTMLElement[] {
+  const nodes: HTMLElement[] = [];
 
   if (descriptor.label) {
-    parts.push(
-      `<div class="informe-schema-tooltip-label">${escapeHtml(String(descriptor.label))}</div>`,
-    );
+    const label = document.createElement('div');
+    label.className = 'informe-schema-detail-label';
+    label.textContent = String(descriptor.label);
+    nodes.push(label);
   }
 
   if (descriptor.description) {
-    parts.push(
-      `<div class="informe-schema-tooltip-description">${escapeHtml(String(descriptor.description))}</div>`,
-    );
+    const description = document.createElement('div');
+    description.className = 'informe-schema-detail-description';
+    description.textContent = String(descriptor.description);
+    nodes.push(description);
   }
 
-  const meta: string[] = [];
+  const metaItems: string[] = [];
 
   if (descriptor.type) {
-    meta.push(String(descriptor.type));
+    metaItems.push(String(descriptor.type));
   }
 
   if (descriptor.required) {
-    meta.push('required');
+    metaItems.push('required');
   }
 
-  if (meta.length > 0) {
-    parts.push(
-      `<div class="informe-schema-tooltip-meta">${meta.map((item) => `<span class="informe-schema-tooltip-tag">${escapeHtml(item)}</span>`).join(' ')}</div>`,
-    );
+  if (metaItems.length > 0) {
+    const meta = document.createElement('div');
+    meta.className = 'informe-schema-detail-meta';
+
+    for (const item of metaItems) {
+      const tag = document.createElement('span');
+      tag.className = 'informe-schema-detail-tag';
+      tag.textContent = item;
+      meta.append(tag);
+    }
+
+    nodes.push(meta);
   }
 
   const constraints: string[] = [];
@@ -1168,19 +1242,13 @@ function buildTooltipContent(descriptor: SchemaDescriptor): string {
   }
 
   if (constraints.length > 0) {
-    parts.push(
-      `<div class="informe-schema-tooltip-constraints">${escapeHtml(constraints.join(', '))}</div>`,
-    );
+    const element = document.createElement('div');
+    element.className = 'informe-schema-detail-constraints';
+    element.textContent = constraints.join(', ');
+    nodes.push(element);
   }
 
-  return parts.join('');
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return nodes;
 }
 
 export class EntryEditor {
@@ -1345,14 +1413,14 @@ export class EntryEditor {
     }
 
     const descriptor = this.schemaRef.current[key];
-    const html = descriptor ? buildTooltipContent(descriptor) : '';
+    const nodes = descriptor ? buildSchemaDetailNodes(descriptor) : [];
 
-    if (!html) {
+    if (nodes.length === 0) {
       return;
     }
 
     const rect = target.getBoundingClientRect();
-    this.tooltip.innerHTML = html;
+    this.tooltip.replaceChildren(...nodes);
     this.tooltip.style.left = `${rect.left}px`;
     this.tooltip.style.top = `${rect.bottom + 4}px`;
     this.tooltip.classList.add('informe-schema-tooltip--visible');
