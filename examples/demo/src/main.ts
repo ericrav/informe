@@ -44,6 +44,8 @@ function getOutputValue(
 }
 
 const informe = new Informe(fields);
+(window as any).informe = informe;
+console.log(informe);
 informe.addEventListener('change', (event) => {
   renderOutput(getOutputValue(event.detail.informe));
 });
