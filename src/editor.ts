@@ -39,7 +39,7 @@ const entrySchema = new Schema({
   nodes: {
     doc: { content: 'entry+' },
     entry: {
-      content: 'text*',
+      content: 'inline*',
       attrs: { disabled: { default: false }, id: { default: null } },
       toDOM(node) {
         const attrs: Record<string, string> = {
@@ -66,7 +66,16 @@ const entrySchema = new Schema({
         },
       ],
     },
-    text: { inline: true },
+    text: { group: 'inline' },
+    hard_break: {
+      inline: true,
+      group: 'inline',
+      selectable: false,
+      parseDOM: [{ tag: 'br' }],
+      toDOM() {
+        return ['br'];
+      },
+    },
   },
 });
 
@@ -79,7 +88,7 @@ export function parseEntryText(text: string): { key: string; value: string } {
 
   return {
     key: text.slice(0, index).trim(),
-    value: text.slice(index + 1).trimStart(),
+    value: text.slice(index + 1),
   };
 }
 
@@ -108,8 +117,8 @@ export function isPatternValid(
 function entriesToDoc(entries: readonly Entry[]): ProseMirrorNode {
   const nodes = entries.map((entry) => {
     const text =
-      entry.value === '' ? entry.key : `${entry.key}: ${entry.value}`;
-    const content = text ? [entrySchema.text(text)] : [];
+      entry.value === '' ? entry.key : `${entry.key}:${entry.value}`;
+    const content = entryTextToContent(text);
 
     return entrySchema.nodes.entry.create(
       { disabled: entry.disabled ?? false, id: entry.id ?? null },
@@ -124,11 +133,47 @@ function entriesToDoc(entries: readonly Entry[]): ProseMirrorNode {
   return entrySchema.nodes.doc.create(null, nodes);
 }
 
+function entryTextToContent(text: string): ProseMirrorNode[] {
+  if (!text) {
+    return [];
+  }
+
+  const content: ProseMirrorNode[] = [];
+  const segments = text.split('\n');
+
+  for (const [index, segment] of segments.entries()) {
+    if (index > 0) {
+      content.push(entrySchema.nodes.hard_break.create());
+    }
+
+    if (segment) {
+      content.push(entrySchema.text(segment));
+    }
+  }
+
+  return content;
+}
+
+function entryNodeToText(node: ProseMirrorNode): string {
+  let text = '';
+
+  node.forEach((child) => {
+    if (child.type === entrySchema.nodes.hard_break) {
+      text += '\n';
+      return;
+    }
+
+    text += child.textContent;
+  });
+
+  return text;
+}
+
 function docToEntries(doc: ProseMirrorNode): Entry[] {
   const entries: Entry[] = [];
 
   doc.forEach((node) => {
-    const { key, value } = parseEntryText(node.textContent);
+    const { key, value } = parseEntryText(entryNodeToText(node));
 
     if (!key && !value) {
       return;
@@ -151,6 +196,7 @@ function docToEntries(doc: ProseMirrorNode): Entry[] {
 }
 
 const schemaHintsKey = new PluginKey<DecorationSet>('schemaHints');
+const focusedEntryKey = new PluginKey<DecorationSet>('focusedEntry');
 const schemaKeyTypeaheadKey = new PluginKey<SchemaKeyTypeaheadPluginState>(
   'schemaKeyTypeahead',
 );
@@ -238,6 +284,54 @@ function createPatternWarningIcon(pattern: string | RegExp): HTMLElement {
   return wrapper;
 }
 
+function createSeparatorGapWidget(): HTMLElement {
+  const span = document.createElement('span');
+  span.contentEditable = 'false';
+  span.className = 'informe-entry-separator-gap';
+  span.setAttribute('aria-hidden', 'true');
+  return span;
+}
+
+function addValueWhitespaceDecorations(
+  decorations: Decoration[],
+  value: string,
+  valueFrom: number,
+): void {
+  let leadingSpaces = 0;
+
+  while (value[leadingSpaces] === ' ') {
+    leadingSpaces += 1;
+  }
+
+  let trailingSpaces = 0;
+
+  while (
+    trailingSpaces < value.length - leadingSpaces &&
+    value[value.length - trailingSpaces - 1] === ' '
+  ) {
+    trailingSpaces += 1;
+  }
+
+  const decorate = (charOffset: number) => {
+    const from = valueFrom + charOffset;
+    decorations.push(
+      Decoration.inline(from, from + 1, {
+        class: 'informe-entry-ws-dot',
+      }),
+    );
+  };
+
+  for (let index = 0; index < leadingSpaces; index++) {
+    decorate(index);
+  }
+
+  const trailingStart = value.length - trailingSpaces;
+
+  for (let index = trailingStart; index < value.length; index++) {
+    decorate(index);
+  }
+}
+
 function buildDecorations(
   doc: ProseMirrorNode,
   schema: SchemaDescriptorMap,
@@ -248,7 +342,7 @@ function buildDecorations(
     [];
 
   doc.forEach((node, offset) => {
-    const text = node.textContent;
+    const text = entryNodeToText(node);
 
     if (!text) {
       return;
@@ -281,7 +375,7 @@ function buildDecorations(
   }
 
   doc.forEach((node, offset) => {
-    const text = node.textContent;
+    const text = entryNodeToText(node);
 
     if (!text) {
       return;
@@ -311,11 +405,21 @@ function buildDecorations(
       return;
     }
 
+    const value = text.slice(colonIndex + 1);
+    const valueFrom = offset + 1 + colonIndex + 1;
     const descriptor = key ? schema[key] : undefined;
     const keyClass =
       descriptor && hasTooltipContent(descriptor)
         ? 'informe-entry-key informe-entry-key--has-info'
         : 'informe-entry-key';
+
+    if (text.includes('\n')) {
+      decorations.push(
+        Decoration.node(offset, offset + node.nodeSize, {
+          style: `--informe-entry-continuation-indent: calc(${colonIndex + 1}ch + var(--informe-entry-separator-gap));`,
+        }),
+      );
+    }
 
     decorations.push(
       Decoration.inline(offset + 1, offset + 1 + colonIndex, {
@@ -328,27 +432,33 @@ function buildDecorations(
       }),
     );
 
+    decorations.push(
+      Decoration.widget(valueFrom, createSeparatorGapWidget, {
+        side: -1,
+        ignoreSelection: true,
+        key: 'informe-entry-separator-gap',
+      }),
+    );
+
     if (colonIndex + 1 < text.length) {
       decorations.push(
-        Decoration.inline(
-          offset + 1 + colonIndex + 1,
-          offset + 1 + text.length,
-          {
-            class: 'informe-entry-value',
-          },
-        ),
+        Decoration.inline(valueFrom, offset + 1 + text.length, {
+          class: 'informe-entry-value',
+        }),
       );
+
+      addValueWhitespaceDecorations(decorations, value, valueFrom);
     }
 
     if (
       descriptor &&
       !node.attrs.disabled &&
       descriptor.pattern != null &&
-      !isPatternValid(text.slice(colonIndex + 1).trimStart(), descriptor)
+      !isPatternValid(value, descriptor)
     ) {
       decorations.push(
         Decoration.widget(
-          offset + 1 + colonIndex + 1,
+          valueFrom,
           () => createPatternWarningIcon(descriptor.pattern as string | RegExp),
           { side: -1, ignoreSelection: true },
         ),
@@ -379,6 +489,83 @@ function schemaHintsPlugin(schemaRef: {
     props: {
       decorations(state) {
         return schemaHintsKey.getState(state);
+      },
+    },
+  });
+}
+
+function buildFocusedEntryDecorations(state: EditorState): DecorationSet {
+  if (!state.selection.empty) {
+    return DecorationSet.empty;
+  }
+
+  const { $from } = state.selection;
+  let depth = $from.depth;
+
+  while (depth > 0 && $from.node(depth).type !== entrySchema.nodes.entry) {
+    depth--;
+  }
+
+  if (depth === 0) {
+    return DecorationSet.empty;
+  }
+
+  const from = $from.before(depth);
+  const node = $from.node(depth);
+
+  return DecorationSet.create(state.doc, [
+    Decoration.node(from, from + node.nodeSize, {
+      class: 'informe-entry--focused',
+    }),
+  ]);
+}
+
+function focusedEntryPlugin(): Plugin {
+  let focused = false;
+
+  return new Plugin({
+    key: focusedEntryKey,
+    state: {
+      init() {
+        return DecorationSet.empty;
+      },
+      apply(transaction, oldDecorations, _, state) {
+        const meta = transaction.getMeta(focusedEntryKey);
+
+        if (meta?.focused === true) {
+          focused = true;
+          return buildFocusedEntryDecorations(state);
+        }
+
+        if (meta?.focused === false) {
+          focused = false;
+          return DecorationSet.empty;
+        }
+
+        if (transaction.docChanged || transaction.selectionSet) {
+          return focused
+            ? buildFocusedEntryDecorations(state)
+            : DecorationSet.empty;
+        }
+
+        return focused
+          ? oldDecorations.map(transaction.mapping, transaction.doc)
+          : DecorationSet.empty;
+      },
+    },
+    props: {
+      decorations(state) {
+        return focusedEntryKey.getState(state);
+      },
+      handleDOMEvents: {
+        focus(view) {
+          view.dispatch(view.state.tr.setMeta(focusedEntryKey, { focused: true }));
+          return false;
+        },
+        blur(view) {
+          view.dispatch(view.state.tr.setMeta(focusedEntryKey, { focused: false }));
+          return false;
+        },
       },
     },
   });
@@ -501,17 +688,15 @@ export function getSchemaValueTypeaheadMatch(
 
   const colonIndex = text.indexOf(':');
 
-  if (colonIndex === -1 || cursorOffset <= colonIndex + 1) {
+  if (colonIndex === -1 || cursorOffset <= colonIndex) {
     return undefined;
   }
 
   const valueStart = colonIndex + 1;
-  const rawValue = text.slice(valueStart);
-  const trimmedStart = rawValue.length - rawValue.trimStart().length;
 
   return {
-    query: text.slice(valueStart, cursorOffset).trimStart(),
-    replaceFromOffset: valueStart + trimmedStart,
+    query: text.slice(valueStart, cursorOffset),
+    replaceFromOffset: valueStart,
     replaceToOffset: text.length,
   };
 }
@@ -611,7 +796,7 @@ function getActiveSchemaKeyTypeahead(
   }
 
   const match = getSchemaKeyTypeaheadMatch(
-    $from.parent.textContent,
+    entryNodeToText($from.parent),
     $from.parentOffset,
   );
 
@@ -653,7 +838,7 @@ function getEntryKeys(doc: ProseMirrorNode): ReadonlySet<string> {
   const keys = new Set<string>();
 
   doc.forEach((node) => {
-    const text = node.textContent;
+    const text = entryNodeToText(node);
 
     if (!text) {
       return;
@@ -815,7 +1000,7 @@ class SchemaKeyTypeaheadView {
       return true;
     }
 
-    if (event.key === 'Enter' || event.key === 'Tab') {
+    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
       event.preventDefault();
       this.acceptSelectedSuggestion();
       return true;
@@ -850,7 +1035,7 @@ class SchemaKeyTypeaheadView {
     }
 
     if (
-      getSchemaKeyTypeaheadMatch($from.parent.textContent, $from.parentOffset)
+      getSchemaKeyTypeaheadMatch(entryNodeToText($from.parent), $from.parentOffset)
     ) {
       this.openRequest = {
         openRequested: true,
@@ -907,7 +1092,7 @@ class SchemaKeyTypeaheadView {
     const hasOptions =
       descriptor?.options != null && descriptor.options.length > 0;
 
-    const replacement = `${suggestion.key}: `;
+    const replacement = `${suggestion.key}:`;
     const position = this.active.from + replacement.length;
     const transaction = this.view.state.tr.insertText(
       replacement,
@@ -1147,7 +1332,7 @@ function getActiveSchemaValueTypeahead(
     return undefined;
   }
 
-  const text = $from.parent.textContent;
+  const text = entryNodeToText($from.parent);
   const match = getSchemaValueTypeaheadMatch(text, $from.parentOffset);
 
   if (!match) {
@@ -1309,7 +1494,7 @@ class SchemaValueTypeaheadView {
       return true;
     }
 
-    if (event.key === 'Enter' || event.key === 'Tab') {
+    if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
       event.preventDefault();
       this.acceptSelectedSuggestion();
       return true;
@@ -1343,7 +1528,12 @@ class SchemaValueTypeaheadView {
       return;
     }
 
-    if (getSchemaValueTypeaheadMatch($from.parent.textContent, $from.parentOffset)) {
+    if (
+      getSchemaValueTypeaheadMatch(
+        entryNodeToText($from.parent),
+        $from.parentOffset,
+      )
+    ) {
       this.openRequest = {
         openRequested: true,
         excludeExistingKeysWhenEmpty: false,
@@ -1364,7 +1554,12 @@ class SchemaValueTypeaheadView {
       return false;
     }
 
-    return getSchemaValueTypeaheadMatch($from.parent.textContent, $from.parentOffset) != null;
+    return (
+      getSchemaValueTypeaheadMatch(
+        entryNodeToText($from.parent),
+        $from.parentOffset,
+      ) != null
+    );
   }
 
   private readonly handleMouseDown = (event: MouseEvent) => {
@@ -1613,6 +1808,40 @@ function insertEntry(
   return true;
 }
 
+function insertValueNewline(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  if (!state.selection.empty) {
+    return false;
+  }
+
+  const { $from } = state.selection;
+
+  if ($from.parent.type !== entrySchema.nodes.entry) {
+    return false;
+  }
+
+  const text = entryNodeToText($from.parent);
+  const colonIndex = text.indexOf(':');
+
+  if (colonIndex === -1 || $from.parentOffset <= colonIndex) {
+    return false;
+  }
+
+  if (!dispatch) {
+    return true;
+  }
+
+  dispatch(
+    state.tr
+      .replaceSelectionWith(entrySchema.nodes.hard_break.create())
+      .scrollIntoView(),
+  );
+
+  return true;
+}
+
 function deleteEmptyEntry(
   state: EditorState,
   dispatch?: (transaction: Transaction) => void,
@@ -1621,7 +1850,7 @@ function deleteEmptyEntry(
 
   if (
     $from.parent.type !== entrySchema.nodes.entry ||
-    $from.parent.textContent.length > 0 ||
+    entryNodeToText($from.parent).length > 0 ||
     state.doc.childCount <= 1
   ) {
     return false;
@@ -1682,6 +1911,40 @@ function decorationClasses(decorations: readonly Decoration[]): string {
   return className;
 }
 
+function decorationStyle(decorations: readonly Decoration[]): string {
+  let style = '';
+
+  for (const decoration of decorations) {
+    const decorationStyleValue = (
+      decoration as unknown as { type?: { attrs?: { style?: string } } }
+    ).type?.attrs?.style;
+
+    if (decorationStyleValue) {
+      style += decorationStyleValue.endsWith(';')
+        ? decorationStyleValue
+        : `${decorationStyleValue};`;
+    }
+  }
+
+  return style;
+}
+
+function applyEntryDecorationAttrs(
+  dom: HTMLElement,
+  disabled: boolean,
+  decorations: readonly Decoration[],
+): void {
+  dom.className = `informe-entry${disabled ? ' informe-entry--disabled' : ''}${decorationClasses(decorations)}`;
+
+  const style = decorationStyle(decorations);
+
+  if (style) {
+    dom.setAttribute('style', style);
+  } else {
+    dom.removeAttribute('style');
+  }
+}
+
 function createEntryNodeView(
   node: ProseMirrorNode,
   view: EditorView,
@@ -1689,7 +1952,7 @@ function createEntryNodeView(
   decorations: readonly Decoration[],
 ): NodeView {
   const dom = document.createElement('div');
-  dom.className = `informe-entry${node.attrs.disabled ? ' informe-entry--disabled' : ''}${decorationClasses(decorations)}`;
+  applyEntryDecorationAttrs(dom, Boolean(node.attrs.disabled), decorations);
 
   const toggleWrapper = document.createElement('span');
   toggleWrapper.contentEditable = 'false';
@@ -1741,7 +2004,7 @@ function createEntryNodeView(
       }
 
       const disabled = Boolean(updatedNode.attrs.disabled);
-      dom.className = `informe-entry${disabled ? ' informe-entry--disabled' : ''}${decorationClasses(updatedDecorations)}`;
+      applyEntryDecorationAttrs(dom, disabled, updatedDecorations);
       toggle.checked = !disabled;
 
       return true;
@@ -1864,9 +2127,11 @@ export class EntryEditor {
       plugins: [
         history(),
         schemaHintsPlugin(this.schemaRef),
+        focusedEntryPlugin(),
         schemaKeyTypeaheadPlugin(this.schemaRef),
         schemaValueTypeaheadPlugin(this.schemaRef),
         keymap({
+          'Shift-Enter': insertValueNewline,
           Enter: insertEntry,
           Backspace: deleteEmptyEntry,
           'Mod-/': toggleDisabled,

@@ -9,9 +9,21 @@ import {
 } from '../src/editor'
 
 test('parses key/value entry text', () => {
-  expect(parseEntryText('caption: Hello world')).toEqual({
+  expect(parseEntryText('caption:Hello world')).toEqual({
     key: 'caption',
     value: 'Hello world',
+  })
+})
+
+test('preserves leading, trailing, and newline whitespace in values', () => {
+  expect(parseEntryText('caption:  Hello world  ')).toEqual({
+    key: 'caption',
+    value: '  Hello world  ',
+  })
+
+  expect(parseEntryText('caption:Hello\nworld')).toEqual({
+    key: 'caption',
+    value: 'Hello\nworld',
   })
 })
 
@@ -318,30 +330,36 @@ test('Informe forEach visits unique resolved entries with the instance', () => {
 })
 
 test('detects value typeahead match when cursor is past the colon', () => {
-  expect(getSchemaValueTypeaheadMatch('color: red', 10)).toEqual({
+  expect(getSchemaValueTypeaheadMatch('color:red', 9)).toEqual({
     query: 'red',
-    replaceFromOffset: 7,
-    replaceToOffset: 10,
-  })
-
-  expect(getSchemaValueTypeaheadMatch('color: re', 9)).toEqual({
-    query: 're',
-    replaceFromOffset: 7,
+    replaceFromOffset: 6,
     replaceToOffset: 9,
   })
 
-  expect(getSchemaValueTypeaheadMatch('color: ', 7)).toEqual({
+  expect(getSchemaValueTypeaheadMatch('color:re', 8)).toEqual({
+    query: 're',
+    replaceFromOffset: 6,
+    replaceToOffset: 8,
+  })
+
+  expect(getSchemaValueTypeaheadMatch('color:', 6)).toEqual({
     query: '',
-    replaceFromOffset: 7,
-    replaceToOffset: 7,
+    replaceFromOffset: 6,
+    replaceToOffset: 6,
+  })
+
+  expect(getSchemaValueTypeaheadMatch('color: red', 10)).toEqual({
+    query: ' red',
+    replaceFromOffset: 6,
+    replaceToOffset: 10,
   })
 })
 
 test('returns undefined for value typeahead match when there is no colon or cursor is before/at separator', () => {
   expect(getSchemaValueTypeaheadMatch('color', 5)).toBeUndefined()
-  expect(getSchemaValueTypeaheadMatch('color: red', 3)).toBeUndefined()
-  // cursor on the space separator (colonIndex+1) is not a value position
-  expect(getSchemaValueTypeaheadMatch('color: red', 6)).toBeUndefined()
+  expect(getSchemaValueTypeaheadMatch('color:red', 3)).toBeUndefined()
+  // cursor on the colon separator is not a value position
+  expect(getSchemaValueTypeaheadMatch('color:red', 5)).toBeUndefined()
 })
 
 test('filters value suggestions by value and label', () => {
