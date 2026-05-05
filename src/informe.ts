@@ -158,6 +158,10 @@ export class Informe<
   ): InformeResolvedValue<TFields, TKey> | undefined;
   get(key: string): string | undefined;
   get(key: string): InformeFieldValue | undefined {
+    if (typeof key !== 'string') {
+      throw new TypeError(`Failed to execute 'get' on 'Informe': 1 string argument required, but only ${typeof key} present.`);
+    }
+
     return this.resolveLastEnabled(key);
   }
 
@@ -166,6 +170,10 @@ export class Informe<
   ): Array<InformeResolvedValue<TFields, TKey> | undefined>;
   getAll(key: string): string[];
   getAll(key: string): Array<InformeFieldValue | undefined> {
+    if (typeof key !== 'string') {
+      throw new TypeError(`Failed to execute 'getAll' on 'Informe': 1 string argument required, but only ${typeof key} present.`);
+    }
+
     const values: Array<InformeFieldValue | undefined> = [];
 
     for (const entry of this.currentEntries()) {
@@ -189,6 +197,10 @@ export class Informe<
   ): this;
   set(key: string, value: InformeFieldValue): this;
   set(key: string, value: InformeFieldValue): this {
+    if (arguments.length < 2) {
+      throw new TypeError(`Failed to execute 'set' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
+    }
+
     const entries = this.currentEntries();
 
     for (let index = entries.length - 1; index >= 0; index--) {
@@ -214,11 +226,19 @@ export class Informe<
   ): void;
   append(key: string, value: InformeFieldValue): void;
   append(key: string, value: InformeFieldValue): void {
+    if (arguments.length < 2) {
+      throw new TypeError(`Failed to execute 'append' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
+    }
+
     this.entryList = [...this.currentEntries(), { key, value: String(value) }];
     this.syncEntries();
   }
 
   delete(key: string): void {
+    if (typeof key !== 'string') {
+      throw new TypeError(`Failed to execute 'delete' on 'Informe': 1 string argument required, but only ${typeof key} present.`);
+    }
+
     this.entryList = this.currentEntries().filter((entry) => entry.key !== key);
     this.syncEntries();
   }
