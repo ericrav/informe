@@ -1,4 +1,7 @@
 export { input } from './input';
+export { color } from './color';
+export { date } from './date';
+export { datetime } from './datetime';
 export type {
   Entry,
   InformeFieldDefinition,
@@ -10,9 +13,16 @@ export type {
   InputOption,
   InputOptionList,
   InputOptions,
+  InputWidget,
+  InputWidgetContext,
   SchemaDescriptor,
   SchemaDescriptorMap,
+  WidgetCleanup,
+  WidgetUpdateCallback,
 } from './input';
+export type { ColorInputOptions } from './color';
+export type { DateInputOptions } from './date';
+export type { DatetimeInputOptions } from './datetime';
 
 export { EntryEditor, createEntryEditor, parseEntryText } from './editor';
 export type { EntryChangeHandler, EntryEditorOptions } from './editor';

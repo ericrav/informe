@@ -17,8 +17,11 @@ import { history, redo, undo } from 'prosemirror-history';
 import type {
   Entry,
   InputOption,
+  InputWidgetContext,
   SchemaDescriptor,
   SchemaDescriptorMap,
+  WidgetCleanup,
+  WidgetUpdateCallback,
 } from './input';
 
 export type EntryChangeHandler = (
@@ -332,9 +335,291 @@ function addValueWhitespaceDecorations(
   }
 }
 
+interface WidgetInstance {
+  key: string;
+  element: HTMLElement;
+  descriptor: SchemaDescriptor;
+  offset: number;
+  value: string;
+  updateCallbacks: WidgetUpdateCallback[];
+  currentCleanups: Array<WidgetCleanup | void>;
+  destroyCallbacks: WidgetCleanup[];
+}
+
+interface WidgetEntrySnapshot {
+  key: string;
+  value: string;
+  descriptor: SchemaDescriptor;
+  offset: number;
+}
+
+class WidgetInstanceController {
+  private readonly instances = new Map<string, WidgetInstance>();
+  private view: EditorView | undefined;
+
+  setView(view: EditorView): void {
+    this.view = view;
+  }
+
+  sync(doc: ProseMirrorNode, schema: SchemaDescriptorMap): void {
+    const snapshots = this.getWidgetEntrySnapshots(doc, schema);
+    const activeKeys = new Set<string>();
+
+    for (const snapshot of snapshots) {
+      activeKeys.add(snapshot.key);
+      const instance = this.instances.get(snapshot.key);
+
+      if (!instance) {
+        continue;
+      }
+
+      if (instance.descriptor !== snapshot.descriptor) {
+        this.destroyInstance(instance);
+        this.instances.delete(snapshot.key);
+        continue;
+      }
+
+      instance.offset = snapshot.offset;
+
+      if (instance.value !== snapshot.value) {
+        this.updateInstance(instance, snapshot.value);
+      }
+    }
+
+    for (const [key, instance] of this.instances) {
+      if (!activeKeys.has(key)) {
+        this.destroyInstance(instance);
+        this.instances.delete(key);
+      }
+    }
+  }
+
+  destroyAll(): void {
+    for (const instance of this.instances.values()) {
+      this.destroyInstance(instance);
+    }
+
+    this.instances.clear();
+  }
+
+  getOrCreate(
+    key: string,
+    descriptor: SchemaDescriptor,
+    value: string,
+    offset: number,
+    view: EditorView,
+  ): HTMLElement {
+    this.view = view;
+    const existing = this.instances.get(key);
+
+    if (existing && existing.descriptor === descriptor) {
+      existing.offset = offset;
+
+      if (existing.value !== value) {
+        this.updateInstance(existing, value);
+      }
+
+      return existing.element;
+    }
+
+    if (existing) {
+      this.destroyInstance(existing);
+      this.instances.delete(key);
+    }
+
+    const instance = this.createInstance(key, descriptor, value, offset);
+    this.instances.set(key, instance);
+    return instance.element;
+  }
+
+  private createInstance(
+    key: string,
+    descriptor: SchemaDescriptor,
+    value: string,
+    offset: number,
+  ): WidgetInstance {
+    if (!descriptor.widget) {
+      throw new Error('Cannot create informe widget without a widget factory.');
+    }
+
+    const instance: WidgetInstance = {
+      key,
+      element: document.createElement('span'),
+      descriptor,
+      offset,
+      value,
+      updateCallbacks: [],
+      currentCleanups: [],
+      destroyCallbacks: [],
+    };
+    const context: InputWidgetContext = {
+      descriptor,
+      setValue: (nextValue) => {
+        this.setValue(instance, nextValue);
+      },
+      onUpdate: (callback) => {
+        instance.updateCallbacks.push(callback);
+        instance.currentCleanups.push(undefined);
+      },
+      onDestroy: (callback) => {
+        instance.destroyCallbacks.push(callback);
+      },
+    };
+
+    instance.element = descriptor.widget(context);
+    instance.element.contentEditable = 'false';
+    this.updateInstance(instance, value);
+
+    return instance;
+  }
+
+  private updateInstance(instance: WidgetInstance, value: string): void {
+    const errors: unknown[] = [];
+
+    for (const [index, callback] of instance.updateCallbacks.entries()) {
+      this.runCleanup(instance.currentCleanups[index], instance, errors);
+
+      try {
+        instance.currentCleanups[index] = callback(value);
+      } catch (error) {
+        this.reportCallbackError(instance, error);
+        errors.push(error);
+        instance.currentCleanups[index] = undefined;
+      }
+    }
+
+    instance.value = value;
+    this.throwCollectedErrors(errors);
+  }
+
+  private destroyInstance(instance: WidgetInstance): void {
+    const errors: unknown[] = [];
+
+    for (let index = instance.currentCleanups.length - 1; index >= 0; index--) {
+      this.runCleanup(instance.currentCleanups[index], instance, errors);
+    }
+
+    for (let index = instance.destroyCallbacks.length - 1; index >= 0; index--) {
+      this.runCleanup(instance.destroyCallbacks[index], instance, errors);
+    }
+
+    instance.element.remove();
+    this.throwCollectedErrors(errors);
+  }
+
+  private runCleanup(
+    cleanup: WidgetCleanup | void,
+    instance: WidgetInstance,
+    errors: unknown[],
+  ): void {
+    if (!cleanup) {
+      return;
+    }
+
+    try {
+      cleanup();
+    } catch (error) {
+      this.reportCallbackError(instance, error);
+      errors.push(error);
+    }
+  }
+
+  private reportCallbackError(instance: WidgetInstance, error: unknown): void {
+    console.error(
+      `Informe widget callback failed for type "${String(instance.descriptor.type ?? 'unknown')}".`,
+      error,
+    );
+  }
+
+  private throwCollectedErrors(errors: unknown[]): void {
+    if (errors.length === 0) {
+      return;
+    }
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+
+    throw new AggregateError(errors, 'Informe widget callbacks failed.');
+  }
+
+  private setValue(instance: WidgetInstance, value: string): void {
+    const view = this.view;
+
+    if (!view) {
+      return;
+    }
+
+    const node = view.state.doc.nodeAt(instance.offset);
+
+    if (!node || node.type !== entrySchema.nodes.entry) {
+      return;
+    }
+
+    const text = entryNodeToText(node);
+    const colonIndex = text.indexOf(':');
+
+    if (colonIndex === -1) {
+      return;
+    }
+
+    const from = instance.offset + 1 + colonIndex + 1;
+    const to = instance.offset + 1 + text.length;
+    const transaction = view.state.tr.insertText(value, from, to);
+    transaction.setSelection(Selection.near(transaction.doc.resolve(from + value.length)));
+    view.dispatch(transaction.scrollIntoView());
+    view.focus();
+  }
+
+  private getWidgetEntrySnapshots(
+    doc: ProseMirrorNode,
+    schema: SchemaDescriptorMap,
+  ): WidgetEntrySnapshot[] {
+    const snapshots: WidgetEntrySnapshot[] = [];
+
+    doc.forEach((node, offset) => {
+      if (node.attrs.disabled) {
+        return;
+      }
+
+      const text = entryNodeToText(node);
+      const colonIndex = text.indexOf(':');
+
+      if (!text || colonIndex === -1) {
+        return;
+      }
+
+      const keyText = text.slice(0, colonIndex).trim();
+      const descriptor = keyText ? schema[keyText] : undefined;
+
+      if (!descriptor?.widget) {
+        return;
+      }
+
+      snapshots.push({
+        key: widgetInstanceKey(node, offset, keyText),
+        value: text.slice(colonIndex + 1),
+        descriptor,
+        offset,
+      });
+    });
+
+    return snapshots;
+  }
+}
+
+function widgetInstanceKey(
+  node: ProseMirrorNode,
+  offset: number,
+  key: string,
+): string {
+  return node.attrs.id ? `id:${String(node.attrs.id)}` : `pos:${offset}:${key}`;
+}
+
 function buildDecorations(
   doc: ProseMirrorNode,
   schema: SchemaDescriptorMap,
+  widgetController?: WidgetInstanceController,
 ): DecorationSet {
   const decorations: Decoration[] = [];
   const knownKeys = new Set(Object.keys(schema));
@@ -440,6 +725,29 @@ function buildDecorations(
       }),
     );
 
+    if (descriptor?.widget && !node.attrs.disabled && widgetController) {
+      const widgetKey = widgetInstanceKey(node, offset, key);
+
+      decorations.push(
+        Decoration.widget(
+          valueFrom,
+          (view) =>
+            widgetController.getOrCreate(
+              widgetKey,
+              descriptor,
+              value,
+              offset,
+              view,
+            ),
+          {
+            side: -1,
+            ignoreSelection: true,
+            key: `informe-entry-widget-${widgetKey}`,
+          },
+        ),
+      );
+    }
+
     if (colonIndex + 1 < text.length) {
       decorations.push(
         Decoration.inline(valueFrom, offset + 1 + text.length, {
@@ -472,15 +780,22 @@ function buildDecorations(
 function schemaHintsPlugin(schemaRef: {
   current: SchemaDescriptorMap;
 }): Plugin {
+  const widgetController = new WidgetInstanceController();
+
   return new Plugin({
     key: schemaHintsKey,
     state: {
       init(_, state) {
-        return buildDecorations(state.doc, schemaRef.current);
+        return buildDecorations(state.doc, schemaRef.current, widgetController);
       },
       apply(transaction, oldDecorations) {
         if (transaction.docChanged || transaction.getMeta(schemaHintsKey)) {
-          return buildDecorations(transaction.doc, schemaRef.current);
+          widgetController.sync(transaction.doc, schemaRef.current);
+          return buildDecorations(
+            transaction.doc,
+            schemaRef.current,
+            widgetController,
+          );
         }
 
         return oldDecorations.map(transaction.mapping, transaction.doc);
@@ -490,6 +805,18 @@ function schemaHintsPlugin(schemaRef: {
       decorations(state) {
         return schemaHintsKey.getState(state);
       },
+    },
+    view(view) {
+      widgetController.setView(view);
+
+      return {
+        update(updatedView) {
+          widgetController.setView(updatedView);
+        },
+        destroy() {
+          widgetController.destroyAll();
+        },
+      };
     },
   });
 }

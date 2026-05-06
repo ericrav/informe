@@ -5,8 +5,20 @@ export interface Entry {
   disabled?: boolean;
 }
 
-export type InformeInputType = 'string' | 'number';
+export type InformeInputType = 'string' | 'number' | 'color' | 'date' | 'datetime';
 export type InformeFieldValue = string | number;
+
+export type WidgetCleanup = () => void;
+export type WidgetUpdateCallback = (value: string) => WidgetCleanup | void;
+
+export interface InputWidgetContext {
+  descriptor: SchemaDescriptor;
+  setValue(newValue: string): void;
+  onUpdate(callback: WidgetUpdateCallback): void;
+  onDestroy(callback: WidgetCleanup): void;
+}
+
+export type InputWidget = (ctx: InputWidgetContext) => HTMLElement;
 
 export interface InputOption {
   label: string;
@@ -20,8 +32,8 @@ export interface SchemaDescriptor {
   label?: string;
   description?: string;
   required?: boolean;
-  min?: number;
-  max?: number;
+  min?: string | number;
+  max?: string | number;
   step?: number;
   minLength?: number;
   maxLength?: number;
@@ -29,6 +41,7 @@ export interface SchemaDescriptor {
   default?: unknown;
   placeholder?: string;
   options?: InputOptionList;
+  widget?: InputWidget;
   [key: string]: unknown;
 }
 
@@ -39,14 +52,15 @@ const inputDescriptorKey = '__informeInput';
 export interface InputOptions<
   TValue extends InformeFieldValue = InformeFieldValue,
 > extends SchemaDescriptor {
-  type?: InformeInputType;
+  type?: 'string' | 'number';
   default?: TValue;
   options?: InputOptionList;
 }
 
 export interface InputDescriptor<
   TValue extends InformeFieldValue = InformeFieldValue,
-> extends InputOptions<TValue> {
+> extends Omit<InputOptions<TValue>, 'type'> {
+  type?: InformeInputType | string;
   readonly __informeInput: true;
 }
 

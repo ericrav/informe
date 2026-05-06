@@ -1,26 +1,33 @@
-import { Informe, input, type InformeValue } from 'informe';
+import { Informe, color, date, datetime, input, type InformeValue } from 'informe';
 import 'informe/style.css';
 import './style.css';
 
 const fields = {
   name: input({ label: 'Full name', default: 'Bob', required: true }),
   age: input({ type: 'number', default: 50, min: 1, max: 99 }),
+  accent: color({
+    label: 'Accent color',
+    default: '#FF8C00',
+    options: [
+      { label: 'Red', value: '#FF0000' },
+      { label: 'Blue', value: '#0000FF' },
+      { label: 'Green', value: '#00AA00' },
+    ],
+  }),
+  birthday: date({
+    label: 'Date of birth',
+    default: '1990-01-01',
+    max: '2026-05-05',
+  }),
+  meeting: datetime({
+    label: 'Meeting time',
+    default: '2026-05-05T09:30',
+  }),
   food: input({ description: 'What is your favorite food?' }),
   email: input({
     label: 'Email address',
     description: 'Where should we send updates?',
     pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-  }),
-  color: input({
-    label: 'Favorite color',
-    description: 'A CSS color name or hex value.',
-    options: [
-      { label: 'Red', value: '#FF0000' },
-      { label: 'Green', value: '#00AA00' },
-      { label: 'Blue', value: '#0000FF' },
-      { label: 'Orange', value: '#FF8C00' },
-      { label: 'Purple', value: '#7B2FBE' },
-    ],
   }),
 };
 
