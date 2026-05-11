@@ -14,10 +14,13 @@ import {
 } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
 import { history, redo, undo } from 'prosemirror-history';
+import { EntryStamper, orderBetween } from './id';
 import type {
   Entry,
+  IdGenerator,
   InputOption,
   InputWidgetContext,
+  RawEntry,
   SchemaDescriptor,
   SchemaDescriptorMap,
   WidgetCleanup,
@@ -25,7 +28,7 @@ import type {
 } from './input';
 
 export type EntryChangeHandler = (
-  entries: Entry[],
+  entries: RawEntry[],
   editor: EntryEditor,
 ) => void;
 
@@ -34,8 +37,8 @@ export interface EntryEditorOptions {
   schema?: SchemaDescriptorMap;
   onChange?: EntryChangeHandler;
   onSave?: EntryChangeHandler;
-  debounceMs?: number;
   className?: string;
+  idGenerator?: IdGenerator;
 }
 
 const entrySchema = new Schema({
@@ -43,7 +46,11 @@ const entrySchema = new Schema({
     doc: { content: 'entry+' },
     entry: {
       content: 'inline*',
-      attrs: { disabled: { default: false }, id: { default: null } },
+      attrs: {
+        disabled: { default: false },
+        id: { default: null },
+        order: { default: null },
+      },
       toDOM(node) {
         const attrs: Record<string, string> = {
           class: `informe-entry${node.attrs.disabled ? ' informe-entry--disabled' : ''}`,
@@ -51,6 +58,10 @@ const entrySchema = new Schema({
 
         if (node.attrs.id) {
           attrs['data-entry-id'] = String(node.attrs.id);
+        }
+
+        if (node.attrs.order) {
+          attrs['data-entry-order'] = String(node.attrs.order);
         }
 
         return ['div', attrs, 0];
@@ -64,6 +75,7 @@ const entrySchema = new Schema({
             return {
               disabled: element.classList.contains('informe-entry--disabled'),
               id: element.dataset.entryId ?? null,
+              order: element.dataset.entryOrder ?? null,
             };
           },
         },
@@ -124,7 +136,11 @@ function entriesToDoc(entries: readonly Entry[]): ProseMirrorNode {
     const content = entryTextToContent(text);
 
     return entrySchema.nodes.entry.create(
-      { disabled: entry.disabled ?? false, id: entry.id ?? null },
+      {
+        disabled: entry.disabled ?? false,
+        id: entry.id ?? null,
+        order: entry.order ?? null,
+      },
       content,
     );
   });
@@ -172,8 +188,8 @@ function entryNodeToText(node: ProseMirrorNode): string {
   return text;
 }
 
-function docToEntries(doc: ProseMirrorNode): Entry[] {
-  const entries: Entry[] = [];
+function docToEntries(doc: ProseMirrorNode): RawEntry[] {
+  const entries: RawEntry[] = [];
 
   doc.forEach((node) => {
     const { key, value } = parseEntryText(entryNodeToText(node));
@@ -188,11 +204,15 @@ function docToEntries(doc: ProseMirrorNode): Entry[] {
       entry.id = node.attrs.id as string;
     }
 
+    if (node.attrs.order) {
+      entry.order = node.attrs.order as string;
+    }
+
     if (node.attrs.disabled) {
       entry.disabled = true;
     }
 
-    entries.push(entry);
+    entries.push(entry as RawEntry);
   });
 
   return entries;
@@ -2424,22 +2444,55 @@ function buildSchemaDetailNodes(descriptor: SchemaDescriptor): HTMLElement[] {
   return nodes;
 }
 
+function entryFromNode(node: ProseMirrorNode): Entry {
+  const { key, value } = parseEntryText(entryNodeToText(node));
+  const entry: Entry = { key, value };
+
+  if (node.attrs.id) {
+    entry.id = String(node.attrs.id);
+  }
+
+  if (node.attrs.order) {
+    entry.order = String(node.attrs.order);
+  }
+
+  if (node.attrs.disabled) {
+    entry.disabled = true;
+  }
+
+  return entry;
+}
+
+function nextEntryOrder(
+  entries: Array<{ entry: Entry }>,
+  startIndex: number,
+): string | undefined {
+  for (let index = startIndex + 1; index < entries.length; index++) {
+    const order = entries[index].entry.order;
+
+    if (order) {
+      return order;
+    }
+  }
+
+  return undefined;
+}
+
 export class EntryEditor {
   private readonly container: HTMLElement;
   private readonly schemaRef: { current: SchemaDescriptorMap };
   private readonly onChangeRef: { current?: EntryChangeHandler };
+  private stamper: EntryStamper;
   private readonly tooltip: HTMLDivElement;
   private readonly handleMouseOver: (event: MouseEvent) => void;
   private readonly handleMouseOut: (event: MouseEvent) => void;
   private view: EditorView;
-  private debounceMs: number;
-  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(container: HTMLElement, options: EntryEditorOptions = {}) {
     this.container = container;
     this.schemaRef = { current: options.schema ?? {} };
     this.onChangeRef = { current: options.onChange ?? options.onSave };
-    this.debounceMs = options.debounceMs ?? 300;
+    this.stamper = new EntryStamper(options.idGenerator);
 
     container.classList.add('informe-entry-editor');
 
@@ -2450,7 +2503,7 @@ export class EntryEditor {
     }
 
     const state = EditorState.create({
-      doc: entriesToDoc(options.entries ?? []),
+      doc: entriesToDoc(this.stamper.stampEntries(options.entries ?? [])),
       plugins: [
         history(),
         schemaHintsPlugin(this.schemaRef),
@@ -2474,11 +2527,19 @@ export class EntryEditor {
       state,
       nodeViews: { entry: createEntryNodeView },
       dispatchTransaction: (transaction) => {
-        const nextState = view.state.apply(transaction);
+        let nextState = view.state.apply(transaction);
+        const stampTransaction = transaction.docChanged
+          ? this.createStampTransaction(nextState)
+          : undefined;
+
+        if (stampTransaction) {
+          nextState = nextState.apply(stampTransaction);
+        }
+
         view.updateState(nextState);
 
         if (transaction.docChanged) {
-          this.scheduleChange();
+          this.emitChange();
         }
       },
     });
@@ -2512,12 +2573,12 @@ export class EntryEditor {
     container.addEventListener('mouseout', this.handleMouseOut);
   }
 
-  getEntries(): Entry[] {
+  getEntries(): RawEntry[] {
     return docToEntries(this.view.state.doc);
   }
 
   setEntries(entries: readonly Entry[]): void {
-    const nextDoc = entriesToDoc(entries);
+    const nextDoc = entriesToDoc(this.stamper.stampEntries(entries));
 
     if (nextDoc.eq(this.view.state.doc)) {
       return;
@@ -2541,8 +2602,9 @@ export class EntryEditor {
       this.onChangeRef.current = options.onChange ?? options.onSave;
     }
 
-    if (options.debounceMs != null) {
-      this.debounceMs = options.debounceMs;
+    if ('idGenerator' in options) {
+      this.stamper = new EntryStamper(options.idGenerator);
+      this.setEntries(this.getEntries());
     }
 
     if (options.schema) {
@@ -2564,21 +2626,68 @@ export class EntryEditor {
     this.hideTooltip();
     this.tooltip.remove();
 
-    if (this.timer) {
-      clearTimeout(this.timer);
-    }
-
     this.view.destroy();
   }
 
-  private scheduleChange(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
+  private emitChange(): void {
+    this.onChangeRef.current?.(this.getEntries(), this);
+  }
+
+  private createStampTransaction(state: EditorState): Transaction | undefined {
+    const entries: Array<{ node: ProseMirrorNode; offset: number; entry: Entry }> = [];
+    const usedIds = new Set<string>();
+
+    state.doc.forEach((node, offset) => {
+      if (node.type !== entrySchema.nodes.entry) {
+        return;
+      }
+
+      const entry = entryFromNode(node);
+      entries.push({ node, offset, entry });
+
+      if (entry.id) {
+        usedIds.add(entry.id);
+      }
+    });
+
+    let transaction: Transaction | undefined;
+
+    for (let index = 0; index < entries.length; index++) {
+      const item = entries[index];
+      const needsId = !item.entry.id;
+      const needsOrder = !item.entry.order;
+
+      if (!needsId && !needsOrder) {
+        continue;
+      }
+
+      const id = needsId
+        ? this.stamper.generateId(usedIds)
+        : item.entry.id as string;
+      const order = needsOrder
+        ? orderBetween(
+            entries[index - 1]?.entry.order,
+            nextEntryOrder(entries, index),
+          )
+        : item.entry.order as string;
+
+      item.entry.id = id;
+      item.entry.order = order;
+      usedIds.add(id);
+      transaction ??= state.tr;
+      transaction.setNodeMarkup(item.offset, undefined, {
+        ...item.node.attrs,
+        id,
+        order,
+      });
     }
 
-    this.timer = setTimeout(() => {
-      this.onChangeRef.current?.(this.getEntries(), this);
-    }, this.debounceMs);
+    if (!transaction) {
+      return undefined;
+    }
+
+    transaction.setMeta('addToHistory', false);
+    return transaction;
   }
 
   private showTooltip(target: HTMLElement): void {

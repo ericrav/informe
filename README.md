@@ -18,6 +18,7 @@ const informe = new Informe({
 
 informe.addEventListener('change', (event) => {
   console.log(Object.fromEntries(event.detail.informe));
+  console.log(event.detail.informe.rawEntries());
 });
 
 informe.mount(document.querySelector('#editor')!);
@@ -60,11 +61,33 @@ returns enabled duplicates in insertion order, so `getAll(key).at(-1)` matches
 strings.
 
 Use `rawEntries()` when you need the full internal data, including disabled and
-duplicate entries:
+duplicate entries. Raw entries always include an `id` and a library-owned
+fractional `order` value, so you can persist them and hydrate them later with
+stable identity and ordering:
 
 ```ts
 console.log(informe.rawEntries());
+// [
+//   { id: '1', order: 'U', key: 'name', value: 'Bob' },
+//   { id: '2', order: 'k', key: 'age', value: '50' },
+// ]
 ```
+
+By default, Informe uses a per-instance counter for ids. Pass `idGenerator`
+when you need a different id space, such as replica-safe ids for a CRDT-backed
+application:
+
+```ts
+import { Informe, randomIds } from 'informe';
+
+const informe = new Informe(fields, {
+  idGenerator: randomIds(),
+});
+```
+
+`change` events fire synchronously after each editor transaction. If you need
+to debounce persistence or network writes, debounce in your application-level
+listener.
 
 The lower-level editor API is still available if you want to manage entries and
 schema descriptors directly:

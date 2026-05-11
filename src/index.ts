@@ -2,8 +2,10 @@ export { input } from './input';
 export { color } from './color';
 export { date } from './date';
 export { datetime } from './datetime';
+export { randomIds } from './id';
 export type {
   Entry,
+  IdGenerator,
   InformeFieldDefinition,
   InformeFieldMap,
   InformeFieldValue,
@@ -15,6 +17,7 @@ export type {
   InputOptions,
   InputWidget,
   InputWidgetContext,
+  RawEntry,
   SchemaDescriptor,
   SchemaDescriptorMap,
   WidgetCleanup,

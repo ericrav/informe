@@ -1,17 +1,20 @@
 import { EntryEditor } from './editor';
+import { EntryStamper } from './id';
 import {
   normalizeInformeFields,
   type Entry,
+  type IdGenerator,
   type InformeFieldKey,
   type InformeFieldMap,
   type InformeFieldValue,
   type InformeResolvedValue,
+  type RawEntry,
   type SchemaDescriptorMap,
 } from './input';
 
 export interface InformeOptions {
-  debounceMs?: number;
   className?: string;
+  idGenerator?: IdGenerator;
 }
 
 export interface InformeChangeDetail<
@@ -34,19 +37,21 @@ export class Informe<
   private fields: TFields;
   private schema: SchemaDescriptorMap;
   private editor: EntryEditor | undefined;
+  private stamper: EntryStamper;
   private options: InformeOptions;
 
   constructor(fields: TFields, options: InformeOptions = {}) {
     super();
 
     const normalized = normalizeInformeFields(fields);
+    this.stamper = new EntryStamper(options.idGenerator);
 
-    this.entryList = normalized.entries;
+    this.entryList = this.stamper.stampEntries(normalized.entries);
     this.fields = fields;
     this.schema = normalized.schema;
     this.options = {
-      debounceMs: options.debounceMs,
       className: options.className,
+      idGenerator: options.idGenerator,
     };
   }
 
@@ -58,8 +63,8 @@ export class Informe<
     this.editor = new EntryEditor(container, {
       entries: this.entryList,
       schema: this.schema,
-      debounceMs: this.options.debounceMs,
       className: this.options.className,
+      idGenerator: this.options.idGenerator,
       onChange: (entries) => {
         this.entryList = entries;
         this.dispatchChange();
@@ -125,23 +130,30 @@ export class Informe<
     const normalized = normalizeInformeFields(fields);
     const next = this as unknown as Informe<TNextFields>;
 
-    next.entryList = normalized.entries;
     next.fields = fields;
     next.schema = normalized.schema;
     next.editor?.setSchema(normalized.schema);
-    next.editor?.setEntries(normalized.entries);
+    next.entryList = next.stamper.stampEntries(normalized.entries);
+    next.editor?.setEntries(next.entryList);
 
     return next;
   }
 
   setOptions(options: InformeOptions): void {
+    if ('idGenerator' in options) {
+      this.stamper = new EntryStamper(options.idGenerator);
+      this.entryList = this.stamper.stampEntries(this.currentEntries());
+    }
+
     this.options = {
-      debounceMs: options.debounceMs ?? this.options.debounceMs,
       className: options.className ?? this.options.className,
+      idGenerator: 'idGenerator' in options
+        ? options.idGenerator
+        : this.options.idGenerator,
     };
 
     this.editor?.setOptions({
-      debounceMs: this.options.debounceMs,
+      idGenerator: this.options.idGenerator,
     });
   }
 
@@ -201,7 +213,7 @@ export class Informe<
       throw new TypeError(`Failed to execute 'set' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
     }
 
-    const entries = this.currentEntries();
+    const entries: Entry[] = this.currentEntries();
 
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index];
@@ -230,7 +242,10 @@ export class Informe<
       throw new TypeError(`Failed to execute 'append' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
     }
 
-    this.entryList = [...this.currentEntries(), { key, value: String(value) }];
+    this.entryList = [
+      ...this.currentEntries(),
+      { key, value: String(value) },
+    ];
     this.syncEntries();
   }
 
@@ -251,7 +266,7 @@ export class Informe<
   reset(): void {
     const normalized = normalizeInformeFields(this.fields);
 
-    this.entryList = normalized.entries;
+    this.entryList = this.stamper.stampEntries(normalized.entries);
     this.schema = normalized.schema;
     this.editor?.setSchema(normalized.schema);
     this.syncEntries();
@@ -288,12 +303,12 @@ export class Informe<
     return this.entries();
   }
 
-  rawEntries(): Entry[] {
+  rawEntries(): RawEntry[] {
     return this.currentEntries().map((entry) => ({ ...entry }));
   }
 
   setRawEntries(entries: readonly Entry[]): void {
-    this.entryList = entries.map((entry) => ({ ...entry }));
+    this.entryList = this.stamper.stampEntries(entries);
     this.syncEntries();
   }
 
@@ -377,14 +392,16 @@ export class Informe<
     );
   }
 
-  private currentEntries(): Entry[] {
+  private currentEntries(): RawEntry[] {
     return (
-      this.editor?.getEntries() ?? this.entryList.map((entry) => ({ ...entry }))
+      this.editor?.getEntries() ?? this.stamper.stampEntries(this.entryList)
     );
   }
 
   private syncEntries(): void {
+    this.entryList = this.stamper.stampEntries(this.entryList);
     this.editor?.setEntries(this.entryList);
+    this.entryList = this.editor?.getEntries() ?? this.entryList;
     this.dispatchChange();
   }
 

@@ -3,7 +3,15 @@ export interface Entry {
   key: string;
   value: string;
   disabled?: boolean;
+  order?: string;
 }
+
+export interface RawEntry extends Entry {
+  id: string;
+  order: string;
+}
+
+export type IdGenerator = () => string;
 
 export type InformeInputType = 'string' | 'number' | 'color' | 'date' | 'datetime';
 export type InformeFieldValue = string | number;

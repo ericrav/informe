@@ -1,5 +1,5 @@
 import {expect, test} from 'vitest'
-import {Informe, input, parseEntryText} from '../src'
+import {Informe, input, parseEntryText, randomIds, type RawEntry} from '../src'
 import {
   getSchemaKeySuggestions,
   getSchemaKeyTypeaheadMatch,
@@ -7,6 +7,27 @@ import {
   getSchemaValueTypeaheadMatch,
   isPatternValid,
 } from '../src/editor'
+import {
+  EntryStamper,
+  InformeIdCollisionError,
+  orderBetween,
+  validateOrderInput,
+} from '../src/id'
+
+function rawEntryData(entries: readonly RawEntry[]) {
+  return entries.map(({id: _id, order: _order, ...entry}) => entry)
+}
+
+function expectStamped(entries: readonly RawEntry[]): void {
+  for (const entry of entries) {
+    expect(entry.id).toEqual(expect.any(String))
+    expect(entry.order).toEqual(expect.any(String))
+  }
+
+  for (let index = 1; index < entries.length; index++) {
+    expect(entries[index - 1].order < entries[index].order).toBe(true)
+  }
+}
 
 test('parses key/value entry text', () => {
   expect(parseEntryText('caption:Hello world')).toEqual({
@@ -130,10 +151,104 @@ test('Informe creates initial entries for defaults and required fields', () => {
     email: input({label: 'Email address', required: true}),
   })
 
-  expect(informe.rawEntries()).toEqual([
+  expectStamped(informe.rawEntries())
+  expect(informe.rawEntries().map(({id}) => id)).toEqual(['1', '2', '3'])
+  expect(rawEntryData(informe.rawEntries())).toEqual([
     {key: 'name', value: 'Bob'},
     {key: 'age', value: '50'},
     {key: 'email', value: ''},
+  ])
+})
+
+test('fractional orders are created between neighboring orders', () => {
+  const first = orderBetween(undefined, undefined)
+  const second = orderBetween(first, undefined)
+  const middle = orderBetween(first, second)
+
+  expect(first < middle).toBe(true)
+  expect(middle < second).toBe(true)
+  expect(validateOrderInput([
+    {id: 'a', order: first, key: 'a', value: ''},
+    {id: 'b', order: middle, key: 'b', value: ''},
+    {id: 'c', order: second, key: 'c', value: ''},
+  ])).toBe(true)
+})
+
+test('default entry stamper mints counter ids and advances past hydrated numeric ids', () => {
+  const stamper = new EntryStamper()
+  const initial = stamper.stampEntries([
+    {key: 'name', value: 'Bob'},
+    {key: 'age', value: '50'},
+  ])
+
+  expect(initial.map(({id}) => id)).toEqual(['1', '2'])
+  expectStamped(initial)
+
+  const hydrated = stamper.stampEntries([
+    {id: '7', order: 'U', key: 'name', value: 'Ada'},
+    {key: 'role', value: 'admin'},
+  ])
+
+  expect(hydrated.map(({id}) => id)).toEqual(['7', '8'])
+  expectStamped(hydrated)
+})
+
+test('randomIds creates unique string ids', () => {
+  const nextId = randomIds()
+  const ids = new Set(Array.from({length: 10}, () => nextId()))
+
+  expect(ids.size).toBe(10)
+  for (const id of ids) {
+    expect(typeof id).toBe('string')
+    expect(id.length).toBeGreaterThan(0)
+  }
+})
+
+test('Informe trusts complete valid hydrated order and recomputes invalid batches', () => {
+  const informe = new Informe({name: 'Bob'})
+
+  informe.setRawEntries([
+    {id: 'a', order: 'A', key: 'name', value: 'Ada'},
+    {id: 'b', order: 'Z', key: 'role', value: 'admin'},
+  ])
+
+  expect(informe.rawEntries().map(({order}) => order)).toEqual(['A', 'Z'])
+
+  informe.setRawEntries([
+    {id: 'a', order: 'A', key: 'name', value: 'Ada'},
+    {id: 'b', key: 'role', value: 'admin'},
+  ])
+
+  expect(informe.rawEntries().map(({order}) => order)).not.toEqual(['A', undefined])
+  expectStamped(informe.rawEntries())
+})
+
+test('custom id generator collision throws and aborts construction', () => {
+  expect(
+    () => new Informe(
+      {
+        name: 'Bob',
+        age: 50,
+      },
+      {idGenerator: () => 'same'},
+    ),
+  ).toThrow(InformeIdCollisionError)
+})
+
+test('Informe change events fire synchronously after programmatic changes', () => {
+  const informe = new Informe({name: 'Bob'})
+  let callCount = 0
+
+  informe.addEventListener('change', () => {
+    callCount += 1
+  })
+
+  informe.append('name', 'Alice')
+
+  expect(callCount).toBe(1)
+  expect(rawEntryData(informe.rawEntries())).toEqual([
+    {key: 'name', value: 'Bob'},
+    {key: 'name', value: 'Alice'},
   ])
 })
 
@@ -170,7 +285,7 @@ test('Informe resolves typed values from the last enabled known entries', () => 
   expect(informe.get('age')).toBe(70)
   expect(informe.get('food')).toBeUndefined()
 
-  expect(informe.rawEntries()).toContainEqual({key: 'unknown', value: 'kept in entries only'})
+  expect(rawEntryData(informe.rawEntries())).toContainEqual({key: 'unknown', value: 'kept in entries only'})
 })
 
 test('Informe returns undefined for blank or invalid number values', () => {
@@ -195,7 +310,7 @@ test('Informe append adds a new winning entry while preserving duplicates', () =
 
   expect(informe.get('name')).toBe('Alice')
   expect(informe.getAll('name')).toEqual(['Bob', 'Alice'])
-  expect(informe.rawEntries()).toEqual([
+  expect(rawEntryData(informe.rawEntries())).toEqual([
     {key: 'name', value: 'Bob'},
     {key: 'name', value: 'Alice'},
   ])
@@ -213,7 +328,7 @@ test('Informe set overwrites the last enabled entry or appends when none is enab
   ])
 
   expect(informe.set('name', 'Ada')).toBe(informe)
-  expect(informe.rawEntries()).toEqual([
+  expect(rawEntryData(informe.rawEntries())).toEqual([
     {key: 'name', value: 'Bob'},
     {key: 'name', value: 'Alice', disabled: true},
     {key: 'name', value: 'Ada'},
@@ -222,7 +337,7 @@ test('Informe set overwrites the last enabled entry or appends when none is enab
   informe.setRawEntries([{key: 'name', value: 'Ada', disabled: true}])
   informe.set('name', 'Grace')
 
-  expect(informe.rawEntries()).toEqual([
+  expect(rawEntryData(informe.rawEntries())).toEqual([
     {key: 'name', value: 'Ada', disabled: true},
     {key: 'name', value: 'Grace'},
   ])
@@ -244,7 +359,7 @@ test('Informe delete removes all matching entries', () => {
   informe.delete('name')
 
   expect(informe.get('name')).toBeUndefined()
-  expect(informe.rawEntries()).toEqual([{key: 'age', value: '50'}])
+  expect(rawEntryData(informe.rawEntries())).toEqual([{key: 'age', value: '50'}])
 })
 
 test('Informe clear removes all entries and reset restores starting defaults', () => {
@@ -261,7 +376,7 @@ test('Informe clear removes all entries and reset restores starting defaults', (
 
   informe.reset()
 
-  expect(informe.rawEntries()).toEqual([
+  expect(rawEntryData(informe.rawEntries())).toEqual([
     {key: 'name', value: 'Bob'},
     {key: 'age', value: '50'},
     {key: 'email', value: ''},

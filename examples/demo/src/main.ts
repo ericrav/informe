@@ -40,8 +40,15 @@ if (!editorElement || !outputElement) {
 
 const output = outputElement;
 
-function renderOutput(value: InformeValue<typeof fields>): void {
-  output.textContent = JSON.stringify(value, null, 2);
+function renderOutput(informe: Informe<typeof fields>): void {
+  output.textContent = JSON.stringify(
+    {
+      value: getOutputValue(informe),
+      rawEntries: informe.rawEntries(),
+    },
+    null,
+    2,
+  );
 }
 
 function getOutputValue(
@@ -54,11 +61,11 @@ const informe = new Informe(fields);
 (window as any).informe = informe;
 console.log(informe);
 informe.addEventListener('change', (event) => {
-  renderOutput(getOutputValue(event.detail.informe));
+  renderOutput(event.detail.informe);
 });
 
 informe.mount(editorElement);
-renderOutput(getOutputValue(informe));
+renderOutput(informe);
 informe.focus();
 
 const resetButton = document.querySelector<HTMLButtonElement>('#reset');
