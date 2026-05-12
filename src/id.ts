@@ -1,8 +1,7 @@
+import { generateKeyBetween, generateNKeysBetween } from 'fractional-indexing';
+
 import type { Entry, IdGenerator, RawEntry } from './input';
 
-const orderAlphabet =
-  '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const orderBase = orderAlphabet.length;
 const orderPattern = /^[0-9A-Za-z]+$/;
 
 export class InformeIdCollisionError extends Error {
@@ -36,42 +35,7 @@ export function orderBetween(
   left: string | undefined,
   right: string | undefined,
 ): string {
-  if (left != null && !isValidOrder(left)) {
-    throw new TypeError(`Invalid Informe order value: "${left}".`);
-  }
-
-  if (right != null && !isValidOrder(right)) {
-    throw new TypeError(`Invalid Informe order value: "${right}".`);
-  }
-
-  if (left != null && right != null && left >= right) {
-    throw new Error('Cannot create an Informe order between unordered bounds.');
-  }
-
-  let prefix = '';
-  let offset = 0;
-
-  while (true) {
-    const leftDigit =
-      left != null && offset < left.length
-        ? orderAlphabet.indexOf(left[offset])
-        : -1;
-    const rightDigit =
-      right != null && offset < right.length
-        ? orderAlphabet.indexOf(right[offset])
-        : orderBase;
-
-    if (rightDigit - leftDigit > 1) {
-      return prefix + orderAlphabet[Math.floor((leftDigit + rightDigit) / 2)];
-    }
-
-    if (leftDigit < 0) {
-      throw new Error('Cannot create an Informe order before the minimum value.');
-    }
-
-    prefix += orderAlphabet[leftDigit];
-    offset += 1;
-  }
+  return generateKeyBetween(left ?? null, right ?? null);
 }
 
 export function validateOrderInput(entries: readonly Entry[]): boolean {
@@ -103,14 +67,18 @@ export class EntryStamper {
     const keepOrders = validateOrderInput(entries);
     const usedIds = this.usedIds(entries);
     const stamped: RawEntry[] = [];
+    const generatedOrders = keepOrders
+      ? undefined
+      : generateNKeysBetween(null, null, entries.length);
 
     this.advanceDefaultId(entries);
 
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
       const id = this.entryId(entry, usedIds);
       const order = keepOrders
         ? (entry.order as string)
-        : orderBetween(stamped.at(-1)?.order, undefined);
+        : (generatedOrders as string[])[index];
 
       stamped.push({ ...entry, id, order });
     }
@@ -190,7 +158,16 @@ export class EntryStamper {
 }
 
 function isValidOrder(value: unknown): value is string {
-  return typeof value === 'string' && orderPattern.test(value);
+  if (typeof value !== 'string' || !orderPattern.test(value)) {
+    return false;
+  }
+
+  try {
+    generateKeyBetween(value, null);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isNonEmptyString(value: unknown): value is string {

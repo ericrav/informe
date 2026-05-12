@@ -208,18 +208,18 @@ test('Informe trusts complete valid hydrated order and recomputes invalid batche
   const informe = new Informe({name: 'Bob'})
 
   informe.setRawEntries([
-    {id: 'a', order: 'A', key: 'name', value: 'Ada'},
-    {id: 'b', order: 'Z', key: 'role', value: 'admin'},
+    {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
+    {id: 'b', order: 'a1', key: 'role', value: 'admin'},
   ])
 
-  expect(informe.rawEntries().map(({order}) => order)).toEqual(['A', 'Z'])
+  expect(informe.rawEntries().map(({order}) => order)).toEqual(['a0', 'a1'])
 
   informe.setRawEntries([
-    {id: 'a', order: 'A', key: 'name', value: 'Ada'},
+    {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
     {id: 'b', key: 'role', value: 'admin'},
   ])
 
-  expect(informe.rawEntries().map(({order}) => order)).not.toEqual(['A', undefined])
+  expect(informe.rawEntries().map(({order}) => order)).not.toEqual(['a0', undefined])
   expectStamped(informe.rawEntries())
 })
 

@@ -68,8 +68,8 @@ stable identity and ordering:
 ```ts
 console.log(informe.rawEntries());
 // [
-//   { id: '1', order: 'U', key: 'name', value: 'Bob' },
-//   { id: '2', order: 'k', key: 'age', value: '50' },
+//   { id: '1', order: 'a0', key: 'name', value: 'Bob' },
+//   { id: '2', order: 'a1', key: 'age', value: '50' },
 // ]
 ```
 

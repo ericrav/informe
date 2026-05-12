@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      fractional-indexing:
+        specifier: ^3.2.0
+        version: 3.2.0
       prosemirror-history:
         specifier: ^1.5.0
         version: 1.5.0
@@ -410,6 +413,10 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fractional-indexing@3.2.0:
+    resolution: {integrity: sha512-PcOxmqwYCW7O2ovKRU8OoQQj2yqTfEB/yeTYk4gPid6dN5ODRfU1hXd9tTVZzax/0NkO7AxpHykvZnT1aYp/BQ==}
+    engines: {node: ^14.13.1 || >=16.0.0}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -1141,6 +1148,8 @@ snapshots:
   fdir@6.5.0(picomatch@4.0.4):
     optionalDependencies:
       picomatch: 4.0.4
+
+  fractional-indexing@3.2.0: {}
 
   fsevents@2.3.3:
     optional: true
