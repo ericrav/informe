@@ -1,4 +1,4 @@
-import { Informe, color, date, datetime, input, type InformeValue } from 'informe';
+import { Informe, color, date, datetime, input, type ChangeRecord, type InformeValue } from 'informe';
 import 'informe/style.css';
 import './style.css';
 
@@ -39,12 +39,14 @@ if (!editorElement || !outputElement) {
 }
 
 const output = outputElement;
+let lastInputChanges: ChangeRecord[] = [];
 
 function renderOutput(informe: Informe<typeof fields>): void {
   output.textContent = JSON.stringify(
     {
       value: getOutputValue(informe),
       rawEntries: informe.rawEntries(),
+      lastInputChanges,
     },
     null,
     2,
@@ -60,6 +62,10 @@ function getOutputValue(
 const informe = new Informe(fields);
 (window as any).informe = informe;
 console.log(informe);
+informe.addEventListener('input', (event) => {
+  lastInputChanges = event.detail.changes;
+  renderOutput(event.detail.informe);
+});
 informe.addEventListener('change', (event) => {
   renderOutput(event.detail.informe);
 });

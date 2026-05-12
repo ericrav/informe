@@ -15,6 +15,7 @@ import {
 import { keymap } from 'prosemirror-keymap';
 import { history, redo, undo } from 'prosemirror-history';
 import { EntryStamper, orderBetween } from './id';
+import { diffEntries, type ChangeRecord } from './changes';
 import type {
   Entry,
   IdGenerator,
@@ -30,6 +31,17 @@ import type {
 export type EntryChangeHandler = (
   entries: RawEntry[],
   editor: EntryEditor,
+) => void;
+
+export interface EntryEditorInputDetail {
+  editor: EntryEditor;
+  changes: ChangeRecord[];
+}
+
+export type EntryEditorInputEvent = CustomEvent<EntryEditorInputDetail>;
+export type EntryEditorInputEventListener = (
+  this: EntryEditor,
+  event: EntryEditorInputEvent,
 ) => void;
 
 export interface EntryEditorOptions {
@@ -2478,7 +2490,7 @@ function nextEntryOrder(
   return undefined;
 }
 
-export class EntryEditor {
+export class EntryEditor extends EventTarget {
   private readonly container: HTMLElement;
   private readonly schemaRef: { current: SchemaDescriptorMap };
   private readonly onChangeRef: { current?: EntryChangeHandler };
@@ -2489,6 +2501,8 @@ export class EntryEditor {
   private view: EditorView;
 
   constructor(container: HTMLElement, options: EntryEditorOptions = {}) {
+    super();
+
     this.container = container;
     this.schemaRef = { current: options.schema ?? {} };
     this.onChangeRef = { current: options.onChange ?? options.onSave };
@@ -2527,6 +2541,9 @@ export class EntryEditor {
       state,
       nodeViews: { entry: createEntryNodeView },
       dispatchTransaction: (transaction) => {
+        const previousEntries = transaction.docChanged
+          ? docToEntries(view.state.doc)
+          : undefined;
         let nextState = view.state.apply(transaction);
         const stampTransaction = transaction.docChanged
           ? this.createStampTransaction(nextState)
@@ -2539,7 +2556,7 @@ export class EntryEditor {
         view.updateState(nextState);
 
         if (transaction.docChanged) {
-          this.emitChange();
+          this.emitMutation(previousEntries ?? []);
         }
       },
     });
@@ -2577,7 +2594,8 @@ export class EntryEditor {
     return docToEntries(this.view.state.doc);
   }
 
-  setEntries(entries: readonly Entry[]): void {
+  setEntries(entries: readonly Entry[], options: { emitInput?: boolean } = {}): void {
+    const previousEntries = this.getEntries();
     const nextDoc = entriesToDoc(this.stamper.stampEntries(entries));
 
     if (nextDoc.eq(this.view.state.doc)) {
@@ -2590,6 +2608,10 @@ export class EntryEditor {
         plugins: this.view.state.plugins,
       }),
     );
+
+    if (options.emitInput !== false) {
+      this.emitMutation(previousEntries);
+    }
   }
 
   setSchema(schema: SchemaDescriptorMap): void {
@@ -2620,6 +2642,56 @@ export class EntryEditor {
     this.view.focus();
   }
 
+  addEventListener(
+    type: 'input',
+    listener: EntryEditorInputEventListener | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: string,
+    listener:
+      | EventListenerOrEventListenerObject
+      | EntryEditorInputEventListener
+      | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(
+      type,
+      listener as EventListenerOrEventListenerObject | null,
+      options,
+    );
+  }
+
+  removeEventListener(
+    type: 'input',
+    listener: EntryEditorInputEventListener | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: string,
+    listener:
+      | EventListenerOrEventListenerObject
+      | EntryEditorInputEventListener
+      | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(
+      type,
+      listener as EventListenerOrEventListenerObject | null,
+      options,
+    );
+  }
+
   destroy(): void {
     this.container.removeEventListener('mouseover', this.handleMouseOver);
     this.container.removeEventListener('mouseout', this.handleMouseOut);
@@ -2629,8 +2701,23 @@ export class EntryEditor {
     this.view.destroy();
   }
 
-  private emitChange(): void {
-    this.onChangeRef.current?.(this.getEntries(), this);
+  private emitMutation(previousEntries: readonly RawEntry[]): void {
+    const entries = this.getEntries();
+    const changes = diffEntries(previousEntries, entries);
+
+    if (changes.length === 0) {
+      return;
+    }
+
+    this.dispatchEvent(
+      new CustomEvent<EntryEditorInputDetail>('input', {
+        detail: {
+          editor: this,
+          changes,
+        },
+      }),
+    );
+    this.onChangeRef.current?.(entries, this);
   }
 
   private createStampTransaction(state: EditorState): Transaction | undefined {

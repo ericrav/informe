@@ -1,4 +1,13 @@
-import { EntryEditor } from './editor';
+import {
+  EntryEditor,
+  type EntryEditorInputEvent,
+} from './editor';
+import {
+  diffEntries,
+  resolvedViewDiffers,
+  type ChangeRecord,
+  type ResolvedView,
+} from './changes';
 import { EntryStamper } from './id';
 import {
   normalizeInformeFields,
@@ -23,12 +32,32 @@ export interface InformeChangeDetail<
   informe: Informe<TFields>;
 }
 
+export interface InformeInputDetail<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> {
+  informe: Informe<TFields>;
+  changes: ChangeRecord[];
+}
+
+export type InformeInputEvent<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = CustomEvent<InformeInputDetail<TFields>>;
+export type InformeInputEventListener<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = (this: Informe<TFields>, event: InformeInputEvent<TFields>) => void;
 export type InformeChangeEvent<
   TFields extends InformeFieldMap = InformeFieldMap,
 > = CustomEvent<InformeChangeDetail<TFields>>;
 export type InformeChangeEventListener<
   TFields extends InformeFieldMap = InformeFieldMap,
 > = (this: Informe<TFields>, event: InformeChangeEvent<TFields>) => void;
+
+export interface InformeEventMap<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> {
+  input: InformeInputEvent<TFields>;
+  change: InformeChangeEvent<TFields>;
+}
 
 export class Informe<
   TFields extends InformeFieldMap = InformeFieldMap,
@@ -65,15 +94,19 @@ export class Informe<
       schema: this.schema,
       className: this.options.className,
       idGenerator: this.options.idGenerator,
-      onChange: (entries) => {
-        this.entryList = entries;
-        this.dispatchChange();
-      },
+    });
+    this.editor.addEventListener('input', (event) => {
+      this.handleEditorInput(event);
     });
 
     return this;
   }
 
+  addEventListener(
+    type: 'input',
+    listener: InformeInputEventListener<TFields> | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
   addEventListener(
     type: 'change',
     listener: InformeChangeEventListener<TFields> | null,
@@ -88,6 +121,7 @@ export class Informe<
     type: string,
     listener:
       | EventListenerOrEventListenerObject
+      | InformeInputEventListener<TFields>
       | InformeChangeEventListener<TFields>
       | null,
     options?: boolean | AddEventListenerOptions,
@@ -100,6 +134,11 @@ export class Informe<
   }
 
   removeEventListener(
+    type: 'input',
+    listener: InformeInputEventListener<TFields> | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
     type: 'change',
     listener: InformeChangeEventListener<TFields> | null,
     options?: boolean | EventListenerOptions,
@@ -113,6 +152,7 @@ export class Informe<
     type: string,
     listener:
       | EventListenerOrEventListenerObject
+      | InformeInputEventListener<TFields>
       | InformeChangeEventListener<TFields>
       | null,
     options?: boolean | EventListenerOptions,
@@ -213,6 +253,8 @@ export class Informe<
       throw new TypeError(`Failed to execute 'set' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
     }
 
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
     const entries: Entry[] = this.currentEntries();
 
     for (let index = entries.length - 1; index >= 0; index--) {
@@ -221,14 +263,14 @@ export class Informe<
       if (!entry.disabled && entry.key === key) {
         entries[index] = { ...entry, value: String(value) };
         this.entryList = entries;
-        this.syncEntries();
+        this.syncEntries(previousEntries, previousView);
         return this;
       }
     }
 
     entries.push({ key, value: String(value) });
     this.entryList = entries;
-    this.syncEntries();
+    this.syncEntries(previousEntries, previousView);
     return this;
   }
 
@@ -242,11 +284,13 @@ export class Informe<
       throw new TypeError(`Failed to execute 'append' on 'Informe': 2 arguments required, but only ${arguments.length - 1} present.`);
     }
 
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
     this.entryList = [
-      ...this.currentEntries(),
+      ...previousEntries,
       { key, value: String(value) },
     ];
-    this.syncEntries();
+    this.syncEntries(previousEntries, previousView);
   }
 
   delete(key: string): void {
@@ -254,22 +298,28 @@ export class Informe<
       throw new TypeError(`Failed to execute 'delete' on 'Informe': 1 string argument required, but only ${typeof key} present.`);
     }
 
-    this.entryList = this.currentEntries().filter((entry) => entry.key !== key);
-    this.syncEntries();
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
+    this.entryList = previousEntries.filter((entry) => entry.key !== key);
+    this.syncEntries(previousEntries, previousView);
   }
 
   clear(): void {
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
     this.entryList = [];
-    this.syncEntries();
+    this.syncEntries(previousEntries, previousView);
   }
 
   reset(): void {
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
     const normalized = normalizeInformeFields(this.fields);
 
     this.entryList = this.stamper.stampEntries(normalized.entries);
     this.schema = normalized.schema;
     this.editor?.setSchema(normalized.schema);
-    this.syncEntries();
+    this.syncEntries(previousEntries, previousView);
   }
 
   keys(): IterableIterator<string> {
@@ -308,8 +358,10 @@ export class Informe<
   }
 
   setRawEntries(entries: readonly Entry[]): void {
+    const previousEntries = this.currentEntries();
+    const previousView = this.resolvedView(previousEntries);
     this.entryList = this.stamper.stampEntries(entries);
-    this.syncEntries();
+    this.syncEntries(previousEntries, previousView);
   }
 
   destroy(): void {
@@ -322,9 +374,10 @@ export class Informe<
     this.editor = undefined;
   }
 
-  private resolveLastEnabled(key: string): InformeFieldValue | undefined {
-    const entries = this.currentEntries();
-
+  private resolveLastEnabled(
+    key: string,
+    entries = this.currentEntries(),
+  ): InformeFieldValue | undefined {
     for (let index = entries.length - 1; index >= 0; index--) {
       const entry = entries[index];
 
@@ -336,10 +389,9 @@ export class Informe<
     return undefined;
   }
 
-  private resolvedKeyOrder(): string[] {
+  private resolvedKeyOrder(entries = this.currentEntries()): string[] {
     const keys = new Set<string>();
     const activeKeys = new Set<string>();
-    const entries = this.currentEntries();
 
     for (const entry of entries) {
       if (!entry.disabled) {
@@ -357,13 +409,19 @@ export class Informe<
   }
 
   private resolvedValues(): Array<InformeFieldValue | undefined> {
-    return this.resolvedKeyOrder().map((key) => this.resolveLastEnabled(key));
+    const entries = this.currentEntries();
+
+    return this.resolvedKeyOrder(entries).map((key) => (
+      this.resolveLastEnabled(key, entries)
+    ));
   }
 
   private resolvedEntries(): Array<[string, InformeFieldValue | undefined]> {
-    return this.resolvedKeyOrder().map((key) => [
+    const entries = this.currentEntries();
+
+    return this.resolvedKeyOrder(entries).map((key) => [
       key,
-      this.resolveLastEnabled(key),
+      this.resolveLastEnabled(key, entries),
     ]);
   }
 
@@ -398,11 +456,52 @@ export class Informe<
     );
   }
 
-  private syncEntries(): void {
+  private syncEntries(
+    previousEntries: readonly RawEntry[],
+    previousView: ResolvedView,
+  ): void {
     this.entryList = this.stamper.stampEntries(this.entryList);
-    this.editor?.setEntries(this.entryList);
+    this.editor?.setEntries(this.entryList, { emitInput: false });
     this.entryList = this.editor?.getEntries() ?? this.entryList;
-    this.dispatchChange();
+    this.dispatchMutation(previousEntries, previousView);
+  }
+
+  private handleEditorInput(event: EntryEditorInputEvent): void {
+    const entries = this.editor?.getEntries() ?? this.currentEntries();
+    const previousEntries = previousEntriesFromChanges(entries, event.detail.changes);
+    const previousView = this.resolvedView(previousEntries);
+
+    this.entryList = entries;
+    this.dispatchMutation(previousEntries, previousView, event.detail.changes);
+  }
+
+  private dispatchMutation(
+    previousEntries: readonly RawEntry[],
+    previousView: ResolvedView,
+    knownChanges?: ChangeRecord[],
+  ): void {
+    const changes = knownChanges ?? diffEntries(previousEntries, this.currentEntries());
+
+    if (changes.length === 0) {
+      return;
+    }
+
+    this.dispatchInput(changes);
+
+    if (resolvedViewDiffers(previousView, this.resolvedView())) {
+      this.dispatchChange();
+    }
+  }
+
+  private dispatchInput(changes: ChangeRecord[]): void {
+    this.dispatchEvent(
+      new CustomEvent<InformeInputDetail<TFields>>('input', {
+        detail: {
+          informe: this,
+          changes,
+        },
+      }),
+    );
   }
 
   private dispatchChange(): void {
@@ -414,4 +513,36 @@ export class Informe<
       }),
     );
   }
+
+  private resolvedView(entries = this.currentEntries()): ResolvedView {
+    return Object.fromEntries(this.resolvedKeyOrder(entries).map((key) => [
+      key,
+      this.resolveLastEnabled(key, entries),
+    ]));
+  }
+}
+
+function previousEntriesFromChanges(
+  nextEntries: readonly RawEntry[],
+  changes: readonly ChangeRecord[],
+): RawEntry[] {
+  const byId = new Map(nextEntries.map((entry) => [entry.id, { ...entry }]));
+
+  for (const change of changes) {
+    if (change.type === 'add') {
+      byId.delete(change.newEntry.id);
+      continue;
+    }
+
+    if (change.type === 'remove') {
+      byId.set(change.oldEntry.id, { ...change.oldEntry });
+      continue;
+    }
+
+    byId.set(change.oldEntry.id, { ...change.oldEntry });
+  }
+
+  return [...byId.values()].sort((left, right) => (
+    left.order < right.order ? -1 : left.order > right.order ? 1 : 0
+  ));
 }

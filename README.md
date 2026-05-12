@@ -16,6 +16,10 @@ const informe = new Informe({
   food: input({ description: 'What is your favorite food?' }),
 });
 
+informe.addEventListener('input', (event) => {
+  console.log(event.detail.changes);
+});
+
 informe.addEventListener('change', (event) => {
   console.log(Object.fromEntries(event.detail.informe));
   console.log(event.detail.informe.rawEntries());
@@ -85,9 +89,22 @@ const informe = new Informe(fields, {
 });
 ```
 
-`change` events fire synchronously after each editor transaction. If you need
-to debounce persistence or network writes, debounce in your application-level
-listener.
+`input` events fire synchronously after each raw entry mutation, including both
+editor edits and programmatic calls such as `set`, `append`, and `delete`.
+`event.detail.changes` is an array of entry records:
+
+```ts
+type ChangeRecord =
+  | { type: 'add'; newEntry: RawEntry }
+  | { type: 'remove'; oldEntry: RawEntry }
+  | { type: 'update'; oldEntry: RawEntry; newEntry: RawEntry };
+```
+
+`change` events fire after `input` only when the resolved
+`Object.fromEntries(informe)` value changes. The `change` detail stays
+`{ informe }`, so existing listeners can keep reading from the current instance.
+If you need to debounce persistence or network writes, debounce in your
+application-level listener.
 
 The lower-level editor API is still available if you want to manage entries and
 schema descriptors directly:

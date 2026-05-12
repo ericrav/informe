@@ -1,5 +1,6 @@
 import {expect, test} from 'vitest'
 import {Informe, input, parseEntryText, randomIds, type RawEntry} from '../src'
+import {diffEntries, resolvedViewDiffers} from '../src/changes'
 import {
   getSchemaKeySuggestions,
   getSchemaKeyTypeaheadMatch,
@@ -235,6 +236,48 @@ test('custom id generator collision throws and aborts construction', () => {
   ).toThrow(InformeIdCollisionError)
 })
 
+test('diffEntries reports adds, removes, and updates by entry id', () => {
+  const previous: RawEntry[] = [
+    {id: 'a', order: 'a0', key: 'name', value: 'Bob'},
+    {id: 'b', order: 'a1', key: 'age', value: '50'},
+    {id: 'c', order: 'a2', key: 'food', value: 'Pizza', disabled: true},
+  ]
+  const next: RawEntry[] = [
+    {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
+    {id: 'c', order: 'a3', key: 'meal', value: 'Pizza'},
+    {id: 'd', order: 'a4', key: 'color', value: 'blue'},
+  ]
+
+  expect(diffEntries(previous, next)).toEqual([
+    {
+      type: 'update',
+      oldEntry: {id: 'a', order: 'a0', key: 'name', value: 'Bob'},
+      newEntry: {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
+    },
+    {
+      type: 'update',
+      oldEntry: {id: 'c', order: 'a2', key: 'food', value: 'Pizza', disabled: true},
+      newEntry: {id: 'c', order: 'a3', key: 'meal', value: 'Pizza'},
+    },
+    {
+      type: 'add',
+      newEntry: {id: 'd', order: 'a4', key: 'color', value: 'blue'},
+    },
+    {
+      type: 'remove',
+      oldEntry: {id: 'b', order: 'a1', key: 'age', value: '50'},
+    },
+  ])
+})
+
+test('resolvedViewDiffers compares key sets and resolved values', () => {
+  expect(resolvedViewDiffers({name: 'Bob'}, {name: 'Bob'})).toBe(false)
+  expect(resolvedViewDiffers({name: 'Bob'}, {name: 'Ada'})).toBe(true)
+  expect(resolvedViewDiffers({name: 'Bob'}, {name: 'Bob', age: 50})).toBe(true)
+  expect(resolvedViewDiffers({name: 'Bob', age: 50}, {name: 'Bob'})).toBe(true)
+  expect(resolvedViewDiffers({age: 12}, {age: 12})).toBe(false)
+})
+
 test('Informe change events fire synchronously after programmatic changes', () => {
   const informe = new Informe({name: 'Bob'})
   let callCount = 0
@@ -250,6 +293,138 @@ test('Informe change events fire synchronously after programmatic changes', () =
     {key: 'name', value: 'Bob'},
     {key: 'name', value: 'Alice'},
   ])
+})
+
+test('Informe input events include entry changes before change events', () => {
+  const informe = new Informe({name: 'Bob'})
+  const calls: string[] = []
+  const changes: unknown[] = []
+
+  informe.addEventListener('input', (event) => {
+    calls.push('input')
+    changes.push(event.detail.changes)
+  })
+  informe.addEventListener('change', () => {
+    calls.push('change')
+  })
+
+  informe.set('name', 'Ada')
+
+  expect(calls).toEqual(['input', 'change'])
+  expect(changes).toEqual([
+    [
+      {
+        type: 'update',
+        oldEntry: {id: '1', order: 'a0', key: 'name', value: 'Bob'},
+        newEntry: {id: '1', order: 'a0', key: 'name', value: 'Ada'},
+      },
+    ],
+  ])
+})
+
+test('Informe suppresses input and change events for no-op mutations', () => {
+  const informe = new Informe({name: 'Bob'})
+  let inputCount = 0
+  let changeCount = 0
+
+  informe.addEventListener('input', () => {
+    inputCount += 1
+  })
+  informe.addEventListener('change', () => {
+    changeCount += 1
+  })
+
+  informe.set('name', 'Bob')
+
+  expect(inputCount).toBe(0)
+  expect(changeCount).toBe(0)
+})
+
+test('Informe append fires input with an add record and change', () => {
+  const informe = new Informe({name: 'Bob'})
+  let inputChanges: unknown
+  let changeCount = 0
+
+  informe.addEventListener('input', (event) => {
+    inputChanges = event.detail.changes
+  })
+  informe.addEventListener('change', () => {
+    changeCount += 1
+  })
+
+  informe.append('name', 'Alice')
+
+  expect(inputChanges).toEqual([
+    {
+      type: 'add',
+      newEntry: {id: '2', order: 'a1', key: 'name', value: 'Alice'},
+    },
+  ])
+  expect(changeCount).toBe(1)
+})
+
+test('Informe delete fires one input event with all removed entries', () => {
+  const informe = new Informe({name: 'Bob', age: input({type: 'number', default: 50})})
+  let inputChanges: unknown
+  let changeCount = 0
+
+  informe.setRawEntries([
+    {id: 'a', order: 'a0', key: 'name', value: 'Bob'},
+    {id: 'b', order: 'a1', key: 'age', value: '50'},
+    {id: 'c', order: 'a2', key: 'name', value: 'Alice', disabled: true},
+    {id: 'd', order: 'a3', key: 'name', value: 'Eve'},
+  ])
+
+  informe.addEventListener('input', (event) => {
+    inputChanges = event.detail.changes
+  })
+  informe.addEventListener('change', () => {
+    changeCount += 1
+  })
+
+  informe.delete('name')
+
+  expect(inputChanges).toEqual([
+    {type: 'remove', oldEntry: {id: 'a', order: 'a0', key: 'name', value: 'Bob'}},
+    {
+      type: 'remove',
+      oldEntry: {id: 'c', order: 'a2', key: 'name', value: 'Alice', disabled: true},
+    },
+    {type: 'remove', oldEntry: {id: 'd', order: 'a3', key: 'name', value: 'Eve'}},
+  ])
+  expect(changeCount).toBe(1)
+})
+
+test('Informe input can fire without change for non-winning entry updates', () => {
+  const informe = new Informe({name: 'Bob'})
+  let inputChanges: unknown
+  let changeCount = 0
+
+  informe.setRawEntries([
+    {id: 'a', order: 'a0', key: 'name', value: 'Bob'},
+    {id: 'b', order: 'a1', key: 'name', value: 'Eve'},
+  ])
+
+  informe.addEventListener('input', (event) => {
+    inputChanges = event.detail.changes
+  })
+  informe.addEventListener('change', () => {
+    changeCount += 1
+  })
+
+  informe.setRawEntries([
+    {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
+    {id: 'b', order: 'a1', key: 'name', value: 'Eve'},
+  ])
+
+  expect(inputChanges).toEqual([
+    {
+      type: 'update',
+      oldEntry: {id: 'a', order: 'a0', key: 'name', value: 'Bob'},
+      newEntry: {id: 'a', order: 'a0', key: 'name', value: 'Ada'},
+    },
+  ])
+  expect(changeCount).toBe(0)
 })
 
 test('Informe exposes standard event target listeners', () => {

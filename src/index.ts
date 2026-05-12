@@ -28,12 +28,23 @@ export type { DateInputOptions } from './date';
 export type { DatetimeInputOptions } from './datetime';
 
 export { EntryEditor, createEntryEditor, parseEntryText } from './editor';
-export type { EntryChangeHandler, EntryEditorOptions } from './editor';
+export type {
+  EntryChangeHandler,
+  EntryEditorInputDetail,
+  EntryEditorInputEvent,
+  EntryEditorInputEventListener,
+  EntryEditorOptions,
+} from './editor';
 
 export { Informe } from './informe';
 export type {
   InformeChangeDetail,
   InformeChangeEvent,
   InformeChangeEventListener,
+  InformeEventMap,
+  InformeInputDetail,
+  InformeInputEvent,
+  InformeInputEventListener,
   InformeOptions,
 } from './informe';
+export type { ChangeRecord } from './changes';
