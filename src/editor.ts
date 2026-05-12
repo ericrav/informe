@@ -948,7 +948,7 @@ export function getSchemaKeyTypeaheadMatch(
     query: text.slice(0, cursorOffset).trim(),
     keyText: text,
     replaceFromOffset: 0,
-    replaceToOffset: text.length,
+    replaceToOffset: cursorOffset,
   };
 }
 
@@ -2150,14 +2150,25 @@ function insertEntry(
     return true;
   }
 
-  const afterEntry = $from.after();
-  const transaction = state.tr.insert(
-    afterEntry,
-    entrySchema.nodes.entry.create({}, []),
-  );
-  transaction.setSelection(
-    Selection.near(transaction.doc.resolve(afterEntry + 1)),
-  );
+  const transaction = state.tr;
+
+  if (!state.selection.empty) {
+    transaction.deleteSelection();
+  }
+
+  const splitAtEnd =
+    state.selection.empty && $from.parentOffset === $from.parent.content.size;
+
+  transaction.split(transaction.mapping.map(state.selection.from), 1, [
+    {
+      type: entrySchema.nodes.entry,
+      attrs: {
+        disabled: splitAtEnd ? false : $from.parent.attrs.disabled,
+        id: null,
+        order: null,
+      },
+    },
+  ]);
   transaction.setMeta(schemaKeyTypeaheadKey, {
     openRequested: true,
     excludeExistingKeysWhenEmpty: true,
@@ -2529,6 +2540,8 @@ export class EntryEditor extends EventTarget {
           Enter: insertEntry,
           Backspace: deleteEmptyEntry,
           'Mod-/': toggleDisabled,
+          'Cmd-Enter': toggleDisabled,
+          'Mod-Enter': toggleDisabled,
           'Mod-z': undo,
           'Mod-Shift-z': redo,
           'Mod-y': redo,

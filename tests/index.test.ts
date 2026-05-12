@@ -1,5 +1,15 @@
+import {TextSelection} from 'prosemirror-state'
+import type {EditorView} from 'prosemirror-view'
 import {expect, test} from 'vitest'
-import {Informe, input, parseEntryText, randomIds, type RawEntry} from '../src'
+import {
+  EntryEditor,
+  Informe,
+  input,
+  parseEntryText,
+  randomIds,
+  type Entry,
+  type RawEntry,
+} from '../src'
 import {diffEntries, resolvedViewDiffers} from '../src/changes'
 import {
   getSchemaKeySuggestions,
@@ -30,6 +40,131 @@ function expectStamped(entries: readonly RawEntry[]): void {
   }
 }
 
+function installLayoutMocks(): void {
+  const rect = {
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  }
+  const rects = Object.assign([rect], {
+    item: (index: number) => rects[index] ?? null,
+  })
+
+  for (const prototype of [
+    HTMLElement.prototype,
+    SVGElement.prototype,
+    Range.prototype,
+    Text.prototype,
+  ] as Array<{
+    getBoundingClientRect?: () => typeof rect
+    getClientRects?: () => typeof rects
+  }>) {
+    prototype.getBoundingClientRect ??= () => rect
+    prototype.getClientRects ??= () => rects
+  }
+}
+
+function createTestEditor(
+  entries: readonly Entry[],
+  options: ConstructorParameters<typeof EntryEditor>[1] = {},
+) {
+  installLayoutMocks()
+
+  const container = document.createElement('div')
+  document.body.append(container)
+
+  const editor = new EntryEditor(container, {...options, entries})
+  const view = (editor as unknown as {view: EditorView}).view
+
+  return {
+    editor,
+    view,
+    destroy() {
+      editor.destroy()
+      container.remove()
+    },
+  }
+}
+
+function entryPosition(view: EditorView, entryIndex: number, offset: number): number {
+  let position = 1
+
+  for (let index = 0; index < entryIndex; index++) {
+    position += view.state.doc.child(index).nodeSize
+  }
+
+  return position + offset
+}
+
+function setCursor(view: EditorView, entryIndex: number, offset: number): void {
+  view.dispatch(
+    view.state.tr.setSelection(
+      TextSelection.create(view.state.doc, entryPosition(view, entryIndex, offset)),
+    ),
+  )
+}
+
+function setTextSelection(
+  view: EditorView,
+  entryIndex: number,
+  fromOffset: number,
+  toOffset: number,
+): void {
+  view.dispatch(
+    view.state.tr.setSelection(
+      TextSelection.create(
+        view.state.doc,
+        entryPosition(view, entryIndex, fromOffset),
+        entryPosition(view, entryIndex, toOffset),
+      ),
+    ),
+  )
+}
+
+function pressEnter(view: EditorView): void {
+  pressKey(view, 'Enter')
+}
+
+function pressTab(view: EditorView): void {
+  pressKey(view, 'Tab')
+}
+
+function pressModEnter(view: EditorView): void {
+  pressKey(view, 'Enter', {metaKey: true})
+}
+
+function pressKey(
+  view: EditorView,
+  key: string,
+  options: KeyboardEventInit = {},
+): void {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...options,
+  })
+
+  view.dom.dispatchEvent(event)
+  expect(event.defaultPrevented).toBe(true)
+}
+
+function typeText(view: EditorView, text: string): void {
+  const {from, to} = view.state.selection
+
+  view.someProp('handleTextInput', (handler) => {
+    handler(view, from, to, text)
+    return undefined
+  })
+  view.dispatch(view.state.tr.insertText(text, from, to))
+}
+
 test('parses key/value entry text', () => {
   expect(parseEntryText('caption:Hello world')).toEqual({
     key: 'caption',
@@ -56,6 +191,151 @@ test('parses key-only entry text', () => {
   })
 })
 
+test('Enter at the end of an entry inserts an empty entry below', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bob'.length)
+    pressEnter(view)
+
+    expect(view.state.doc.childCount).toBe(2)
+    expect(view.state.doc.child(0).textContent).toBe('name:Bob')
+    expect(view.state.doc.child(1).textContent).toBe('')
+    expect(view.state.doc.child(0).attrs.id).toBe('first')
+    expect(view.state.doc.child(1).attrs.id).not.toBe('first')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter in the middle of an entry splits following text into a new entry', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bo'.length)
+    pressEnter(view)
+
+    const entries = editor.getEntries()
+    expect(rawEntryData(entries)).toEqual([
+      {key: 'name', value: 'Bo'},
+      {key: 'b', value: ''},
+    ])
+    expect(entries[0].id).toBe('first')
+    expect(entries[1].id).not.toBe('first')
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter at the start of the first entry inserts a blank entry above', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 0)
+    pressEnter(view)
+
+    const entries = editor.getEntries()
+    expect(view.state.doc.childCount).toBe(2)
+    expect(view.state.doc.child(0).textContent).toBe('')
+    expect(view.state.doc.child(0).attrs.id).toBe('first')
+    expect(rawEntryData(entries)).toEqual([{key: 'name', value: 'Bob'}])
+    expect(entries[0].id).not.toBe('first')
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter in the middle of a disabled entry keeps both split entries disabled', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob', disabled: true},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bo'.length)
+    pressEnter(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bo', disabled: true},
+      {key: 'b', value: '', disabled: true},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter at the end of a disabled entry creates an enabled empty entry', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob', disabled: true},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bob'.length)
+    pressEnter(view)
+
+    expect(view.state.doc.childCount).toBe(2)
+    expect(view.state.doc.child(0).attrs.disabled).toBe(true)
+    expect(view.state.doc.child(1).textContent).toBe('')
+    expect(view.state.doc.child(1).attrs.disabled).toBe(false)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob', disabled: true},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Cmd+Enter toggles the focused entry disabled state', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bo'.length)
+    pressModEnter(view)
+
+    expect(view.state.doc.childCount).toBe(1)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob', disabled: true},
+    ])
+
+    pressModEnter(view)
+
+    expect(view.state.doc.childCount).toBe(1)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter deletes a selected range before splitting the entry', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setTextSelection(view, 0, 'name:'.length, 'name:Bo'.length)
+    pressEnter(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: ''},
+      {key: 'b', value: ''},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
 test('detects typeahead key replacement ranges before a separator exists', () => {
   expect(getSchemaKeyTypeaheadMatch('fo', 2)).toEqual({
     query: 'fo',
@@ -64,8 +344,57 @@ test('detects typeahead key replacement ranges before a separator exists', () =>
     replaceToOffset: 2,
   })
 
+  expect(getSchemaKeyTypeaheadMatch('fo Pizza', 2)).toEqual({
+    query: 'fo',
+    keyText: 'fo Pizza',
+    replaceFromOffset: 0,
+    replaceToOffset: 2,
+  })
+
   expect(getSchemaKeyTypeaheadMatch('fo: Pizza', 2)).toBeUndefined()
   expect(getSchemaKeyTypeaheadMatch('food: Pizza', 6)).toBeUndefined()
+})
+
+test('accepting a key suggestion preserves text after the cursor as the value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'Bob', value: ''}],
+    {schema: {name: {}}},
+  )
+
+  try {
+    view.focus()
+    setCursor(view, 0, 0)
+    typeText(view, 'na')
+    pressTab(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob'},
+    ])
+    expect(view.state.doc.child(0).textContent).toBe('name:Bob')
+  } finally {
+    destroy()
+  }
+})
+
+test('accepting a key suggestion preserves suffix whitespace in the value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: ' Bob', value: ''}],
+    {schema: {name: {}}},
+  )
+
+  try {
+    view.focus()
+    setCursor(view, 0, 0)
+    typeText(view, 'na')
+    pressTab(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: ' Bob'},
+    ])
+    expect(view.state.doc.child(0).textContent).toBe('name: Bob')
+  } finally {
+    destroy()
+  }
 })
 
 test('filters schema key suggestions by key and label', () => {
