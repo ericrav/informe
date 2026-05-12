@@ -127,6 +127,24 @@ function setTextSelection(
   )
 }
 
+function setTextSelectionAcrossEntries(
+  view: EditorView,
+  fromEntryIndex: number,
+  fromOffset: number,
+  toEntryIndex: number,
+  toOffset: number,
+): void {
+  view.dispatch(
+    view.state.tr.setSelection(
+      TextSelection.create(
+        view.state.doc,
+        entryPosition(view, fromEntryIndex, fromOffset),
+        entryPosition(view, toEntryIndex, toOffset),
+      ),
+    ),
+  )
+}
+
 function pressEnter(view: EditorView): void {
   pressKey(view, 'Enter')
 }
@@ -330,6 +348,42 @@ test('Enter deletes a selected range before splitting the entry', () => {
     expect(rawEntryData(editor.getEntries())).toEqual([
       {key: 'name', value: ''},
       {key: 'b', value: ''},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace deletes a selection spanning multiple entries', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'a', value: '111'},
+    {id: 'second', order: 'a1', key: 'b', value: '222'},
+  ])
+
+  try {
+    setTextSelectionAcrossEntries(view, 0, 'a:1'.length, 1, 'b:2'.length)
+    pressKey(view, 'Backspace')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'a', value: '122'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Delete deletes a selection spanning multiple entries', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'a', value: '111'},
+    {id: 'second', order: 'a1', key: 'b', value: '222'},
+  ])
+
+  try {
+    setTextSelectionAcrossEntries(view, 0, 'a:1'.length, 1, 'b:2'.length)
+    pressKey(view, 'Delete')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'a', value: '122'},
     ])
   } finally {
     destroy()

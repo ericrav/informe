@@ -2235,6 +2235,30 @@ function deleteEmptyEntry(
   return true;
 }
 
+function deleteNonEmptySelection(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  if (state.selection.empty) {
+    return false;
+  }
+
+  if (!dispatch) {
+    return true;
+  }
+
+  dispatch(state.tr.deleteSelection().scrollIntoView());
+
+  return true;
+}
+
+function backspaceCommand(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  return deleteNonEmptySelection(state, dispatch) || deleteEmptyEntry(state, dispatch);
+}
+
 function toggleDisabled(
   state: EditorState,
   dispatch?: (transaction: Transaction) => void,
@@ -2538,7 +2562,8 @@ export class EntryEditor extends EventTarget {
         keymap({
           'Shift-Enter': insertValueNewline,
           Enter: insertEntry,
-          Backspace: deleteEmptyEntry,
+          Backspace: backspaceCommand,
+          Delete: deleteNonEmptySelection,
           'Mod-/': toggleDisabled,
           'Cmd-Enter': toggleDisabled,
           'Mod-Enter': toggleDisabled,
