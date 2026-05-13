@@ -2274,11 +2274,70 @@ function deleteNonEmptySelection(
   return true;
 }
 
+function joinWithPreviousEntry(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  if (!state.selection.empty) {
+    return false;
+  }
+
+  const { $from } = state.selection;
+
+  if ($from.parent.type !== entrySchema.nodes.entry) {
+    return false;
+  }
+
+  if ($from.parentOffset !== 0) {
+    return false;
+  }
+
+  const currentEntryPos = $from.before();
+
+  let prevEntryNode: ProseMirrorNode | undefined;
+  let prevEntryPos = -1;
+
+  state.doc.forEach((node, offset) => {
+    if (offset + node.nodeSize === currentEntryPos) {
+      prevEntryNode = node;
+      prevEntryPos = offset;
+    }
+  });
+
+  if (!prevEntryNode) {
+    return false;
+  }
+
+  if (!dispatch) {
+    return true;
+  }
+
+  const prevText = entryNodeToText(prevEntryNode);
+  const transaction = state.tr;
+
+  if (prevText.length === 0) {
+    transaction.delete(prevEntryPos, prevEntryPos + prevEntryNode.nodeSize);
+    const newPos = prevEntryPos + 1;
+    transaction.setSelection(Selection.near(transaction.doc.resolve(newPos)));
+  } else {
+    const cursorAfterJoin = prevEntryPos + 1 + prevEntryNode.content.size;
+    transaction.join(currentEntryPos);
+    transaction.setSelection(Selection.near(transaction.doc.resolve(cursorAfterJoin)));
+  }
+
+  dispatch(transaction.scrollIntoView());
+  return true;
+}
+
 function backspaceCommand(
   state: EditorState,
   dispatch?: (transaction: Transaction) => void,
 ): boolean {
-  return deleteNonEmptySelection(state, dispatch) || deleteEmptyEntry(state, dispatch);
+  return (
+    deleteNonEmptySelection(state, dispatch) ||
+    joinWithPreviousEntry(state, dispatch) ||
+    deleteEmptyEntry(state, dispatch)
+  );
 }
 
 function toggleDisabled(

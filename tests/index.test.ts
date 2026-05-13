@@ -396,6 +396,109 @@ test('Delete deletes a selection spanning multiple entries', () => {
   }
 })
 
+test('Backspace at start of entry deletes the previous entry when it is strictly empty', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: '', value: ''},
+    {id: 'second', order: 'a1', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 1, 0)
+    pressKey(view, 'Backspace')
+
+    expect(view.state.doc.childCount).toBe(1)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob'},
+    ])
+    // Cursor should be at offset 0 of the surviving entry
+    expect(view.state.selection.from).toBe(1)
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace at start of entry merges into a non-empty previous entry', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+    {id: 'second', order: 'a1', key: 'age', value: '25'},
+  ])
+
+  try {
+    setCursor(view, 1, 0)
+    pressKey(view, 'Backspace')
+
+    expect(view.state.doc.childCount).toBe(1)
+    // Text is merged: "name:Bob" + "age:25" → key "name", value "Bobage:25"
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bobage:25'},
+    ])
+    // Cursor is at the join point: right after "name:Bob" (offset 8)
+    expect(view.state.selection.from).toBe(9)
+    // Surviving entry retains the first entry's id
+    expect(editor.getEntries()[0].id).toBe('first')
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace at start of entry with whitespace-only previous entry merges (not deletes)', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: ' ', value: ''},
+    {id: 'second', order: 'a1', key: 'age', value: '25'},
+  ])
+
+  try {
+    setCursor(view, 1, 0)
+    pressKey(view, 'Backspace')
+
+    // Whitespace-only previous entry is not empty, so it merges.
+    // Keys are trimmed by parseEntryNodeText, so ' age' trims to 'age'.
+    expect(view.state.doc.childCount).toBe(1)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'age', value: '25'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace at start of entry merges with a disabled previous entry', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob', disabled: true},
+    {id: 'second', order: 'a1', key: 'age', value: '25'},
+  ])
+
+  try {
+    setCursor(view, 1, 0)
+    pressKey(view, 'Backspace')
+
+    expect(view.state.doc.childCount).toBe(1)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bobage:25', disabled: true},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace at start of the first entry does not delete anything when entry has content', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 0)
+    // backspaceCommand returns false here (no previous entry, current not empty)
+    // so we dispatch manually rather than pressKey (which asserts defaultPrevented)
+    const before = rawEntryData(editor.getEntries())
+    view.someProp('handleKeyDown', (fn) => fn(view, new KeyboardEvent('keydown', {key: 'Backspace', bubbles: true, cancelable: true})))
+
+    expect(rawEntryData(editor.getEntries())).toEqual(before)
+  } finally {
+    destroy()
+  }
+})
+
 test('detects typeahead key replacement ranges before a separator exists', () => {
   expect(getSchemaKeyTypeaheadMatch('fo', 2)).toEqual({
     query: 'fo',
