@@ -1,7 +1,7 @@
 {
   "name": "informe",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Formless input for evolving apps",
   "author": "Eric Rabinowitz <er@ericrabinowitz.com>",
   "license": "MIT",
@@ -25,7 +25,7 @@
   },
   "files": [
     "dist",
-    "src/style.css"
+    "src"
   ],
   "scripts": {
     "build": "tsdown",
