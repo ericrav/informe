@@ -394,13 +394,13 @@ export class Informe<
     const activeKeys = new Set<string>();
 
     for (const entry of entries) {
-      if (!entry.disabled) {
+      if (!entry.disabled && entry.key) {
         activeKeys.add(entry.key);
       }
     }
 
     for (const entry of entries) {
-      if (activeKeys.has(entry.key)) {
+      if (entry.key && activeKeys.has(entry.key)) {
         keys.add(entry.key);
       }
     }

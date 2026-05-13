@@ -2,6 +2,7 @@ export interface Entry {
   id?: string;
   key: string;
   value: string;
+  hasSeparator?: boolean;
   disabled?: boolean;
   order?: string;
 }

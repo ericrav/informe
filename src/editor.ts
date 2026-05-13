@@ -28,6 +28,11 @@ import type {
   WidgetUpdateCallback,
 } from './input';
 
+interface EntryCursorSnapshot {
+  id: string;
+  offset: number;
+}
+
 export type EntryChangeHandler = (
   entries: RawEntry[],
   editor: EntryEditor,
@@ -119,6 +124,26 @@ export function parseEntryText(text: string): { key: string; value: string } {
   };
 }
 
+function parseEntryNodeText(text: string): Entry {
+  const index = text.indexOf(':');
+
+  if (index === -1) {
+    return { key: text.trim(), value: '' };
+  }
+
+  const value = text.slice(index + 1);
+  const entry: Entry = {
+    key: text.slice(0, index).trim(),
+    value,
+  };
+
+  if (value === '') {
+    entry.hasSeparator = true;
+  }
+
+  return entry;
+}
+
 export function isPatternValid(
   value: string,
   descriptor: SchemaDescriptor,
@@ -143,8 +168,9 @@ export function isPatternValid(
 
 function entriesToDoc(entries: readonly Entry[]): ProseMirrorNode {
   const nodes = entries.map((entry) => {
-    const text =
-      entry.value === '' ? entry.key : `${entry.key}:${entry.value}`;
+    const text = entry.value === '' && !entry.hasSeparator
+      ? entry.key
+      : `${entry.key}:${entry.value}`;
     const content = entryTextToContent(text);
 
     return entrySchema.nodes.entry.create(
@@ -204,13 +230,7 @@ function docToEntries(doc: ProseMirrorNode): RawEntry[] {
   const entries: RawEntry[] = [];
 
   doc.forEach((node) => {
-    const { key, value } = parseEntryText(entryNodeToText(node));
-
-    if (!key && !value) {
-      return;
-    }
-
-    const entry: Entry = { key, value };
+    const entry = parseEntryNodeText(entryNodeToText(node));
 
     if (node.attrs.id) {
       entry.id = node.attrs.id as string;
@@ -1207,9 +1227,11 @@ function getEntryKeys(doc: ProseMirrorNode): ReadonlySet<string> {
     const keyEnd = colonIndex === -1 ? text.length : colonIndex;
     const key = text.slice(0, keyEnd).trim();
 
-    if (key) {
-      keys.add(key);
+    if (!key) {
+      return;
     }
+
+    keys.add(key);
   });
 
   return keys;
@@ -2492,8 +2514,7 @@ function buildSchemaDetailNodes(descriptor: SchemaDescriptor): HTMLElement[] {
 }
 
 function entryFromNode(node: ProseMirrorNode): Entry {
-  const { key, value } = parseEntryText(entryNodeToText(node));
-  const entry: Entry = { key, value };
+  const entry = parseEntryNodeText(entryNodeToText(node));
 
   if (node.attrs.id) {
     entry.id = String(node.attrs.id);
@@ -2508,6 +2529,53 @@ function entryFromNode(node: ProseMirrorNode): Entry {
   }
 
   return entry;
+}
+
+function captureEntryCursor(state: EditorState): EntryCursorSnapshot | undefined {
+  if (!state.selection.empty) {
+    return undefined;
+  }
+
+  const { $from } = state.selection;
+  let depth = $from.depth;
+
+  while (depth > 0 && $from.node(depth).type !== entrySchema.nodes.entry) {
+    depth--;
+  }
+
+  if (depth === 0) {
+    return undefined;
+  }
+
+  const node = $from.node(depth);
+  const id = node.attrs.id;
+
+  if (!id) {
+    return undefined;
+  }
+
+  return {
+    id: String(id),
+    offset: $from.pos - $from.start(depth),
+  };
+}
+
+function restoreEntryCursor(
+  transaction: Transaction,
+  cursor: EntryCursorSnapshot | undefined,
+): void {
+  if (!cursor) {
+    return;
+  }
+
+  transaction.doc.forEach((node, offset) => {
+    if (node.type !== entrySchema.nodes.entry || node.attrs.id !== cursor.id) {
+      return;
+    }
+
+    const position = offset + 1 + Math.min(cursor.offset, node.content.size);
+    transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
+  });
 }
 
 function nextEntryOrder(
@@ -2533,6 +2601,7 @@ export class EntryEditor extends EventTarget {
   private readonly tooltip: HTMLDivElement;
   private readonly handleMouseOver: (event: MouseEvent) => void;
   private readonly handleMouseOut: (event: MouseEvent) => void;
+  private suppressNextInput = false;
   private view: EditorView;
 
   constructor(container: HTMLElement, options: EntryEditorOptions = {}) {
@@ -2593,9 +2662,11 @@ export class EntryEditor extends EventTarget {
 
         view.updateState(nextState);
 
-        if (transaction.docChanged) {
+        if (transaction.docChanged && !this.suppressNextInput) {
           this.emitMutation(previousEntries ?? []);
         }
+
+        this.suppressNextInput = false;
       },
     });
     this.view = view;
@@ -2640,16 +2711,15 @@ export class EntryEditor extends EventTarget {
       return;
     }
 
-    this.view.updateState(
-      EditorState.create({
-        doc: nextDoc,
-        plugins: this.view.state.plugins,
-      }),
+    const transaction = this.view.state.tr.replaceWith(
+      0,
+      this.view.state.doc.content.size,
+      nextDoc.content,
     );
-
-    if (options.emitInput !== false) {
-      this.emitMutation(previousEntries);
-    }
+    transaction.setMeta('addToHistory', false);
+    restoreEntryCursor(transaction, captureEntryCursor(this.view.state));
+    this.suppressNextInput = options.emitInput === false;
+    this.view.dispatch(transaction);
   }
 
   setSchema(schema: SchemaDescriptorMap): void {

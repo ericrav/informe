@@ -71,6 +71,7 @@ function entriesEqual(left: RawEntry, right: RawEntry): boolean {
     left.order === right.order &&
     left.key === right.key &&
     left.value === right.value &&
+    Boolean(left.hasSeparator) === Boolean(right.hasSeparator) &&
     Boolean(left.disabled) === Boolean(right.disabled)
   );
 }

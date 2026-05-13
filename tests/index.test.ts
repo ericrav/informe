@@ -225,6 +225,7 @@ test('Enter at the end of an entry inserts an empty entry below', () => {
     expect(view.state.doc.child(1).attrs.id).not.toBe('first')
     expect(rawEntryData(editor.getEntries())).toEqual([
       {key: 'name', value: 'Bob'},
+      {key: '', value: ''},
     ])
   } finally {
     destroy()
@@ -265,8 +266,12 @@ test('Enter at the start of the first entry inserts a blank entry above', () => 
     expect(view.state.doc.childCount).toBe(2)
     expect(view.state.doc.child(0).textContent).toBe('')
     expect(view.state.doc.child(0).attrs.id).toBe('first')
-    expect(rawEntryData(entries)).toEqual([{key: 'name', value: 'Bob'}])
-    expect(entries[0].id).not.toBe('first')
+    expect(rawEntryData(entries)).toEqual([
+      {key: '', value: ''},
+      {key: 'name', value: 'Bob'},
+    ])
+    expect(entries[0].id).toBe('first')
+    expect(entries[1].id).not.toBe('first')
   } finally {
     destroy()
   }
@@ -305,6 +310,7 @@ test('Enter at the end of a disabled entry creates an enabled empty entry', () =
     expect(view.state.doc.child(1).attrs.disabled).toBe(false)
     expect(rawEntryData(editor.getEntries())).toEqual([
       {key: 'name', value: 'Bob', disabled: true},
+      {key: '', value: ''},
     ])
   } finally {
     destroy()
@@ -346,7 +352,7 @@ test('Enter deletes a selected range before splitting the entry', () => {
     pressEnter(view)
 
     expect(rawEntryData(editor.getEntries())).toEqual([
-      {key: 'name', value: ''},
+      {key: 'name', value: '', hasSeparator: true},
       {key: 'b', value: ''},
     ])
   } finally {
@@ -446,6 +452,55 @@ test('accepting a key suggestion preserves suffix whitespace in the value', () =
       {key: 'name', value: ' Bob'},
     ])
     expect(view.state.doc.child(0).textContent).toBe('name: Bob')
+  } finally {
+    destroy()
+  }
+})
+
+test('accepting a key suggestion preserves an empty value separator across setEntries', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: '', value: ''}],
+    {schema: {name: {}}},
+  )
+
+  try {
+    view.focus()
+    setCursor(view, 0, 0)
+    typeText(view, 'na')
+    pressTab(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: '', hasSeparator: true},
+    ])
+    expect(view.state.doc.child(0).textContent).toBe('name:')
+
+    editor.setEntries(editor.getEntries(), {emitInput: false})
+
+    expect(view.state.doc.child(0).textContent).toBe('name:')
+  } finally {
+    destroy()
+  }
+})
+
+test('blank entries are preserved across setEntries', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:Bob'.length)
+    pressEnter(view)
+
+    const entries = editor.getEntries()
+    expect(rawEntryData(entries)).toEqual([
+      {key: 'name', value: 'Bob'},
+      {key: '', value: ''},
+    ])
+
+    editor.setEntries(entries, {emitInput: false})
+
+    expect(view.state.doc.childCount).toBe(2)
+    expect(view.state.doc.child(1).textContent).toBe('')
   } finally {
     destroy()
   }
