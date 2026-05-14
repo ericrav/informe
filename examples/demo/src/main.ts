@@ -2,7 +2,7 @@ import { Informe, color, date, datetime, input, type ChangeRecord, type InformeV
 import 'informe/style.css';
 import './style.css';
 
-const fields = {
+const informe = new Informe({
   name: input({ label: 'Full name', default: 'Bob', required: true }),
   age: input({ type: 'number', default: 50, min: 1, max: 99 }),
   accent: color({
@@ -29,7 +29,9 @@ const fields = {
     description: 'Where should we send updates?',
     pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
   }),
-};
+});
+(window as any).informe = informe;
+console.log(informe);
 
 const editorElement = document.querySelector<HTMLElement>('#editor');
 const outputElement = document.querySelector<HTMLPreElement>('#output');
@@ -41,10 +43,10 @@ if (!editorElement || !outputElement) {
 const output = outputElement;
 let lastInputChanges: ChangeRecord[] = [];
 
-function renderOutput(informe: Informe<typeof fields>): void {
+function renderOutput(informe: Informe): void {
   output.textContent = JSON.stringify(
     {
-      value: getOutputValue(informe),
+      value: Object.fromEntries(informe),
       rawEntries: informe.rawEntries(),
       lastInputChanges,
     },
@@ -53,15 +55,6 @@ function renderOutput(informe: Informe<typeof fields>): void {
   );
 }
 
-function getOutputValue(
-  informe: Informe<typeof fields>,
-): InformeValue<typeof fields> {
-  return Object.fromEntries(informe) as InformeValue<typeof fields>;
-}
-
-const informe = new Informe(fields);
-(window as any).informe = informe;
-console.log(informe);
 informe.addEventListener('input', (event) => {
   lastInputChanges = event.detail.changes;
   renderOutput(event.detail.informe);
