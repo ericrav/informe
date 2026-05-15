@@ -339,14 +339,6 @@ function createPatternWarningIcon(pattern: string | RegExp): HTMLElement {
   return wrapper;
 }
 
-function createSeparatorGapWidget(): HTMLElement {
-  const span = document.createElement('span');
-  span.contentEditable = 'false';
-  span.className = 'informe-entry-separator-gap';
-  span.setAttribute('aria-hidden', 'true');
-  return span;
-}
-
 function addValueWhitespaceDecorations(
   decorations: Decoration[],
   value: string,
@@ -750,13 +742,11 @@ function buildDecorations(
         ? 'informe-entry-key informe-entry-key--has-info'
         : 'informe-entry-key';
 
-    if (text.includes('\n')) {
-      decorations.push(
-        Decoration.node(offset, offset + node.nodeSize, {
-          style: `--informe-entry-continuation-indent: calc(${colonIndex + 1}ch + var(--informe-entry-separator-gap));`,
-        }),
-      );
-    }
+    decorations.push(
+      Decoration.node(offset, offset + node.nodeSize, {
+        style: `--informe-entry-continuation-indent: calc(${colonIndex + 1}ch + var(--informe-entry-separator-gap));`,
+      }),
+    );
 
     decorations.push(
       Decoration.inline(offset + 1, offset + 1 + colonIndex, {
@@ -766,14 +756,6 @@ function buildDecorations(
     decorations.push(
       Decoration.inline(offset + 1 + colonIndex, offset + 1 + colonIndex + 1, {
         class: 'informe-entry-separator',
-      }),
-    );
-
-    decorations.push(
-      Decoration.widget(valueFrom, createSeparatorGapWidget, {
-        side: -1,
-        ignoreSelection: true,
-        key: 'informe-entry-separator-gap',
       }),
     );
 
