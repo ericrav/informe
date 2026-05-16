@@ -130,11 +130,12 @@
 
 .informe-entry-ws-dot::before {
   position: absolute;
-  inset: 0;
+  left: 0;
   text-align: center;
-  color: rgba(101, 109, 118, 0.48);
-  content: '\00b7';
+  color: rgba(101, 109, 118, 0.65);
+  content: '·';
   pointer-events: none;
+  text-indent: 0;
 }
 
 .informe-entry-pattern-warning {
