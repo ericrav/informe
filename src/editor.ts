@@ -744,7 +744,7 @@ function buildDecorations(
 
     decorations.push(
       Decoration.node(offset, offset + node.nodeSize, {
-        style: `--informe-entry-continuation-indent: calc(${colonIndex + 1}ch + var(--informe-entry-separator-gap));`,
+        style: `--informe-entry-continuation-indent: ${colonIndex + 2}ch;`,
       }),
     );
 
@@ -757,6 +757,23 @@ function buildDecorations(
       Decoration.inline(offset + 1 + colonIndex, offset + 1 + colonIndex + 1, {
         class: 'informe-entry-separator',
       }),
+    );
+    decorations.push(
+      Decoration.widget(
+        valueFrom,
+        () => {
+          const span = document.createElement('span');
+          span.contentEditable = 'false';
+          span.className = 'informe-entry-separator-gap';
+          span.textContent = ' ';
+          return span;
+        },
+        {
+          side: -2,
+          ignoreSelection: true,
+          key: 'informe-entry-separator-gap',
+        },
+      ),
     );
 
     if (descriptor?.widget && !node.attrs.disabled && widgetController) {
@@ -2256,6 +2273,37 @@ function deleteNonEmptySelection(
   return true;
 }
 
+function deleteSeparatorBeforeValue(
+  state: EditorState,
+  dispatch?: (transaction: Transaction) => void,
+): boolean {
+  if (!state.selection.empty) {
+    return false;
+  }
+
+  const { $from } = state.selection;
+
+  if ($from.parent.type !== entrySchema.nodes.entry) {
+    return false;
+  }
+
+  const text = entryNodeToText($from.parent);
+  const colonIndex = text.indexOf(':');
+
+  if (colonIndex === -1 || $from.parentOffset !== colonIndex + 1) {
+    return false;
+  }
+
+  if (!dispatch) {
+    return true;
+  }
+
+  const position = $from.pos;
+  dispatch(state.tr.delete(position - 1, position).scrollIntoView());
+
+  return true;
+}
+
 function joinWithPreviousEntry(
   state: EditorState,
   dispatch?: (transaction: Transaction) => void,
@@ -2317,6 +2365,7 @@ function backspaceCommand(
 ): boolean {
   return (
     deleteNonEmptySelection(state, dispatch) ||
+    deleteSeparatorBeforeValue(state, dispatch) ||
     joinWithPreviousEntry(state, dispatch) ||
     deleteEmptyEntry(state, dispatch)
   );
@@ -2745,7 +2794,6 @@ export class EntryEditor extends EventTarget {
   }
 
   setEntries(entries: readonly Entry[], options: { emitInput?: boolean } = {}): void {
-    const previousEntries = this.getEntries();
     const nextDoc = entriesToDoc(this.stamper.stampEntries(entries));
 
     if (nextDoc.eq(this.view.state.doc)) {

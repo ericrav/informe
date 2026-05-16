@@ -202,6 +202,26 @@ test('preserves leading, trailing, and newline whitespace in values', () => {
   })
 })
 
+test('renders a real DOM space between separator and value without parsing it as value', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: 'Bob'},
+  ])
+
+  try {
+    const gap = view.dom.querySelector<HTMLElement>('.informe-entry-separator-gap')
+
+    expect(gap).not.toBeNull()
+    expect(gap?.textContent).toBe(' ')
+    expect(gap?.contentEditable).toBe('false')
+    expect(view.dom.textContent).toContain('name: Bob')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: 'Bob'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
 test('parses key-only entry text', () => {
   expect(parseEntryText(' disabled ')).toEqual({
     key: 'disabled',
@@ -373,6 +393,24 @@ test('Backspace deletes a selection spanning multiple entries', () => {
     expect(rawEntryData(editor.getEntries())).toEqual([
       {key: 'a', value: '122'},
     ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Backspace at start of value deletes the separator', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'name', value: '', hasSeparator: true},
+  ])
+
+  try {
+    setCursor(view, 0, 'name:'.length)
+    pressKey(view, 'Backspace')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'name', value: ''},
+    ])
+    expect(view.state.selection.from).toBe(entryPosition(view, 0, 'name'.length))
   } finally {
     destroy()
   }

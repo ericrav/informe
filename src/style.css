@@ -7,7 +7,6 @@
   --informe-border-color: #e1e4e8;
   --informe-text-primary: #24292f;
   --informe-text-secondary: #656d76;
-  --informe-entry-separator-gap: 0.65ch;
 
   box-sizing: border-box;
   border: 1px solid var(--informe-border-color);
@@ -113,8 +112,11 @@
 }
 
 .informe-entry-separator {
-  margin-right: var(--informe-entry-separator-gap);
   color: var(--informe-text-secondary);
+}
+
+.informe-entry-separator-gap {
+  user-select: text;
 }
 
 .informe-entry-value {
