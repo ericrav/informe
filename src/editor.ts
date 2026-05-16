@@ -726,6 +726,7 @@ function buildDecorations(
       decorations.push(
         Decoration.inline(offset + 1, offset + 1 + keyEnd, {
           class: 'informe-entry-key--unknown',
+          spellcheck: 'false',
         }),
       );
     }
@@ -751,6 +752,7 @@ function buildDecorations(
     decorations.push(
       Decoration.inline(offset + 1, offset + 1 + colonIndex, {
         class: keyClass,
+        spellcheck: 'false',
       }),
     );
     decorations.push(
