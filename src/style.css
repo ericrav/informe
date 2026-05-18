@@ -139,6 +139,13 @@
   text-indent: 0;
 }
 
+.informe-entry-newline-marker {
+  color: rgba(101, 109, 118, 0.65);
+  font-family: var(--informe-font-mono);
+  user-select: none;
+  pointer-events: none;
+}
+
 .informe-entry-pattern-warning {
   display: inline-flex;
   align-items: center;

@@ -222,6 +222,32 @@ test('renders a real DOM space between separator and value without parsing it as
   }
 })
 
+test('renders soft-break markers without adding them to the parsed value', () => {
+  const {editor, view, destroy} = createTestEditor([
+    {id: 'first', order: 'a0', key: 'caption', value: 'Hello\nwide\nworld'},
+  ])
+
+  try {
+    const markers = view.dom.querySelectorAll<HTMLElement>(
+      '.informe-entry-newline-marker',
+    )
+
+    expect(markers).toHaveLength(2)
+    expect([...markers].map((marker) => marker.textContent)).toEqual([
+      '\u21B5',
+      '\u21B5',
+    ])
+    expect([...markers].every((marker) => marker.contentEditable === 'false')).toBe(
+      true,
+    )
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'caption', value: 'Hello\nwide\nworld'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
 test('parses key-only entry text', () => {
   expect(parseEntryText(' disabled ')).toEqual({
     key: 'disabled',

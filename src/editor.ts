@@ -379,6 +379,37 @@ function addValueWhitespaceDecorations(
   }
 }
 
+function addValueNewlineDecorations(
+  decorations: Decoration[],
+  value: string,
+  valueFrom: number,
+): void {
+  for (let index = 0; index < value.length; index++) {
+    if (value[index] !== '\n') {
+      continue;
+    }
+
+    decorations.push(
+      Decoration.widget(
+        valueFrom + index,
+        () => {
+          const span = document.createElement('span');
+          span.contentEditable = 'false';
+          span.className = 'informe-entry-newline-marker';
+          span.textContent = '\u21B5';
+          span.setAttribute('aria-hidden', 'true');
+          return span;
+        },
+        {
+          side: -1,
+          ignoreSelection: true,
+          key: `informe-entry-newline-marker-${index}`,
+        },
+      ),
+    );
+  }
+}
+
 interface WidgetInstance {
   key: string;
   element: HTMLElement;
@@ -809,6 +840,7 @@ function buildDecorations(
       );
 
       addValueWhitespaceDecorations(decorations, value, valueFrom);
+      addValueNewlineDecorations(decorations, value, valueFrom);
     }
 
     if (
