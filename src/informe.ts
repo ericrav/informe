@@ -1,7 +1,17 @@
 import {
   EntryEditor,
   type EntryEditorInputEvent,
+  type EntryEditorSelectionEvent,
+  type EntrySelectionSnapshot,
 } from './editor';
+import {
+  buildPeerStack,
+  defaultRenderPeer,
+  groupPeersByEntry,
+  peerStackSignature,
+  type InformePeer,
+  type PeerRenderer,
+} from './presence';
 import {
   diffEntries,
   resolvedViewDiffers,
@@ -24,7 +34,13 @@ import {
 export interface InformeOptions {
   className?: string;
   idGenerator?: IdGenerator;
+  /** How to render a single peer's avatar. Defaults to an initials badge. */
+  renderPeer?: PeerRenderer;
+  /** Avatars shown per entry before collapsing the rest into a +N chip. */
+  maxPeersPerEntry?: number;
 }
+
+const DEFAULT_MAX_PEERS_PER_ENTRY = 3;
 
 export interface InformeChangeDetail<
   TFields extends InformeFieldMap = InformeFieldMap,
@@ -39,6 +55,13 @@ export interface InformeInputDetail<
   changes: ChangeRecord[];
 }
 
+export interface InformeSelectionDetail<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> {
+  informe: Informe<TFields>;
+  selection: EntrySelectionSnapshot | null;
+}
+
 export type InformeInputEvent<
   TFields extends InformeFieldMap = InformeFieldMap,
 > = CustomEvent<InformeInputDetail<TFields>>;
@@ -51,18 +74,30 @@ export type InformeChangeEvent<
 export type InformeChangeEventListener<
   TFields extends InformeFieldMap = InformeFieldMap,
 > = (this: Informe<TFields>, event: InformeChangeEvent<TFields>) => void;
+export type InformeSelectionEvent<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = CustomEvent<InformeSelectionDetail<TFields>>;
+export type InformeSelectionEventListener<
+  TFields extends InformeFieldMap = InformeFieldMap,
+> = (this: Informe<TFields>, event: InformeSelectionEvent<TFields>) => void;
 
 export interface InformeEventMap<
   TFields extends InformeFieldMap = InformeFieldMap,
 > {
   input: InformeInputEvent<TFields>;
   change: InformeChangeEvent<TFields>;
+  selectionchange: InformeSelectionEvent<TFields>;
 }
 
 export class Informe<
   TFields extends InformeFieldMap = InformeFieldMap,
 > extends EventTarget {
   private entryList: Entry[];
+  private presencePeers: InformePeer[] = [];
+  private presenceElements = new Map<string, HTMLElement>();
+  private presenceSignatures = new Map<string, string>();
+  private renderPeer: PeerRenderer;
+  private maxPeersPerEntry: number;
   private fields: TFields;
   private schema: SchemaDescriptorMap;
   private editor: EntryEditor | undefined;
@@ -78,9 +113,13 @@ export class Informe<
     this.entryList = this.stamper.stampEntries(normalized.entries);
     this.fields = fields;
     this.schema = normalized.schema;
+    this.renderPeer = options.renderPeer ?? defaultRenderPeer;
+    this.maxPeersPerEntry = options.maxPeersPerEntry ?? DEFAULT_MAX_PEERS_PER_ENTRY;
     this.options = {
       className: options.className,
       idGenerator: options.idGenerator,
+      renderPeer: options.renderPeer,
+      maxPeersPerEntry: options.maxPeersPerEntry,
     };
   }
 
@@ -95,8 +134,12 @@ export class Informe<
       className: this.options.className,
       idGenerator: this.options.idGenerator,
     });
+    this.editor.setGutterContents(this.presenceElements);
     this.editor.addEventListener('input', (event) => {
       this.handleEditorInput(event);
+    });
+    this.editor.addEventListener('selectionchange', (event) => {
+      this.handleEditorSelection(event);
     });
 
     return this;
@@ -113,6 +156,11 @@ export class Informe<
     options?: boolean | AddEventListenerOptions,
   ): void;
   addEventListener(
+    type: 'selectionchange',
+    listener: InformeSelectionEventListener<TFields> | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
@@ -123,6 +171,7 @@ export class Informe<
       | EventListenerOrEventListenerObject
       | InformeInputEventListener<TFields>
       | InformeChangeEventListener<TFields>
+      | InformeSelectionEventListener<TFields>
       | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
@@ -144,6 +193,11 @@ export class Informe<
     options?: boolean | EventListenerOptions,
   ): void;
   removeEventListener(
+    type: 'selectionchange',
+    listener: InformeSelectionEventListener<TFields> | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | EventListenerOptions,
@@ -154,6 +208,7 @@ export class Informe<
       | EventListenerOrEventListenerObject
       | InformeInputEventListener<TFields>
       | InformeChangeEventListener<TFields>
+      | InformeSelectionEventListener<TFields>
       | null,
     options?: boolean | EventListenerOptions,
   ): void {
@@ -190,15 +245,48 @@ export class Informe<
       idGenerator: 'idGenerator' in options
         ? options.idGenerator
         : this.options.idGenerator,
+      renderPeer: 'renderPeer' in options
+        ? options.renderPeer
+        : this.options.renderPeer,
+      maxPeersPerEntry: 'maxPeersPerEntry' in options
+        ? options.maxPeersPerEntry
+        : this.options.maxPeersPerEntry,
     };
 
     this.editor?.setOptions({
       idGenerator: this.options.idGenerator,
     });
+
+    if ('renderPeer' in options) {
+      this.renderPeer = options.renderPeer ?? defaultRenderPeer;
+    }
+
+    if ('maxPeersPerEntry' in options) {
+      this.maxPeersPerEntry = options.maxPeersPerEntry ?? DEFAULT_MAX_PEERS_PER_ENTRY;
+    }
+
+    if ('renderPeer' in options || 'maxPeersPerEntry' in options) {
+      this.presenceSignatures.clear();
+      this.renderPresence();
+    }
   }
 
   focus(): void {
     this.editor?.focus();
+  }
+
+  getSelectionSnapshot(): EntrySelectionSnapshot | null {
+    return this.editor?.getSelectionSnapshot() ?? null;
+  }
+
+  /**
+   * Publish where collaborating peers are. Informe groups peers by entry,
+   * stacks their avatars (capped by `maxPeersPerEntry` with a +N chip), and
+   * renders each via `renderPeer`. Pass `[]` to clear all presence.
+   */
+  setPresence(peers: readonly InformePeer[]): void {
+    this.presencePeers = [...peers];
+    this.renderPresence();
   }
 
   get size(): number {
@@ -473,6 +561,41 @@ export class Informe<
 
     this.entryList = entries;
     this.dispatchMutation(previousEntries, previousView, event.detail.changes);
+  }
+
+  private handleEditorSelection(event: EntryEditorSelectionEvent): void {
+    this.dispatchEvent(
+      new CustomEvent<InformeSelectionDetail<TFields>>('selectionchange', {
+        detail: {
+          informe: this,
+          selection: event.detail.selection,
+        },
+      }),
+    );
+  }
+
+  private renderPresence(): void {
+    const byEntry = groupPeersByEntry(this.presencePeers);
+    const nextElements = new Map<string, HTMLElement>();
+    const nextSignatures = new Map<string, string>();
+
+    for (const [entryId, peers] of byEntry) {
+      const signature = peerStackSignature(peers, this.maxPeersPerEntry);
+      nextSignatures.set(entryId, signature);
+
+      const reusable = this.presenceSignatures.get(entryId) === signature
+        ? this.presenceElements.get(entryId)
+        : undefined;
+
+      nextElements.set(
+        entryId,
+        reusable ?? buildPeerStack(peers, this.renderPeer, this.maxPeersPerEntry),
+      );
+    }
+
+    this.presenceElements = nextElements;
+    this.presenceSignatures = nextSignatures;
+    this.editor?.setGutterContents(this.presenceElements);
   }
 
   private dispatchMutation(

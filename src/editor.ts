@@ -49,6 +49,24 @@ export type EntryEditorInputEventListener = (
   event: EntryEditorInputEvent,
 ) => void;
 
+export interface EntrySelectionSnapshot {
+  entryId: string;
+  key: string;
+  field: 'key' | 'value';
+  offset: number;
+}
+
+export interface EntryEditorSelectionDetail {
+  editor: EntryEditor;
+  selection: EntrySelectionSnapshot | null;
+}
+
+export type EntryEditorSelectionEvent = CustomEvent<EntryEditorSelectionDetail>;
+export type EntryEditorSelectionEventListener = (
+  this: EntryEditor,
+  event: EntryEditorSelectionEvent,
+) => void;
+
 export interface EntryEditorOptions {
   entries?: readonly Entry[];
   schema?: SchemaDescriptorMap;
@@ -2485,11 +2503,26 @@ function applyEntryDecorationAttrs(
   }
 }
 
+interface EntryGutterSlotBinding {
+  entry: Entry;
+  entryElement: HTMLElement;
+  slotElement: HTMLElement;
+}
+
+interface EntryNodeViewHooks {
+  registerGutterSlot: (
+    entryId: string,
+    binding: EntryGutterSlotBinding,
+  ) => void;
+  unregisterGutterSlot: (entryId: string, slotElement: HTMLElement) => void;
+}
+
 function createEntryNodeView(
   node: ProseMirrorNode,
   view: EditorView,
   getPosition: () => number | undefined,
   decorations: readonly Decoration[],
+  hooks?: EntryNodeViewHooks,
 ): NodeView {
   const dom = document.createElement('div');
   applyEntryDecorationAttrs(dom, Boolean(node.attrs.disabled), decorations);
@@ -2497,6 +2530,10 @@ function createEntryNodeView(
   const toggleWrapper = document.createElement('span');
   toggleWrapper.contentEditable = 'false';
   toggleWrapper.className = 'informe-entry-toggle-wrapper';
+
+  const gutterSlot = document.createElement('span');
+  gutterSlot.className = 'informe-entry-gutter-slot';
+  toggleWrapper.append(gutterSlot);
 
   const toggle = document.createElement('input');
   toggle.type = 'checkbox';
@@ -2535,6 +2572,31 @@ function createEntryNodeView(
 
   dom.append(toggleWrapper, contentDOM);
 
+  const applyEntryDatasetAttrs = (entryNode: ProseMirrorNode): void => {
+    if (entryNode.attrs.id) {
+      dom.dataset.entryId = String(entryNode.attrs.id);
+    } else {
+      delete dom.dataset.entryId;
+    }
+
+    if (entryNode.attrs.order) {
+      dom.dataset.entryOrder = String(entryNode.attrs.order);
+    } else {
+      delete dom.dataset.entryOrder;
+    }
+  };
+
+  applyEntryDatasetAttrs(node);
+
+  let mountedEntryId = node.attrs.id ? String(node.attrs.id) : undefined;
+  if (mountedEntryId) {
+    hooks?.registerGutterSlot(mountedEntryId, {
+      entry: entryFromNode(node),
+      entryElement: dom,
+      slotElement: gutterSlot,
+    });
+  }
+
   return {
     dom,
     contentDOM,
@@ -2545,9 +2607,33 @@ function createEntryNodeView(
 
       const disabled = Boolean(updatedNode.attrs.disabled);
       applyEntryDecorationAttrs(dom, disabled, updatedDecorations);
+      applyEntryDatasetAttrs(updatedNode);
       toggle.checked = !disabled;
 
+      const nextEntryId = updatedNode.attrs.id
+        ? String(updatedNode.attrs.id)
+        : undefined;
+
+      if (mountedEntryId && mountedEntryId !== nextEntryId) {
+        hooks?.unregisterGutterSlot(mountedEntryId, gutterSlot);
+        mountedEntryId = undefined;
+      }
+
+      if (nextEntryId) {
+        mountedEntryId = nextEntryId;
+        hooks?.registerGutterSlot(nextEntryId, {
+          entry: entryFromNode(updatedNode),
+          entryElement: dom,
+          slotElement: gutterSlot,
+        });
+      }
+
       return true;
+    },
+    destroy() {
+      if (mountedEntryId) {
+        hooks?.unregisterGutterSlot(mountedEntryId, gutterSlot);
+      }
     },
   };
 }
@@ -2684,6 +2770,43 @@ function captureEntryCursor(state: EditorState): EntryCursorSnapshot | undefined
   };
 }
 
+function getEntrySelectionSnapshot(
+  state: EditorState,
+): EntrySelectionSnapshot | null {
+  const { $from } = state.selection;
+  let depth = $from.depth;
+
+  while (depth > 0 && $from.node(depth).type !== entrySchema.nodes.entry) {
+    depth--;
+  }
+
+  if (depth === 0) {
+    return null;
+  }
+
+  const node = $from.node(depth);
+  const entryId = node.attrs.id;
+
+  if (!entryId) {
+    return null;
+  }
+
+  const text = node.textContent;
+  const { key } = parseEntryText(text);
+  const colonIndex = text.indexOf(':');
+  const offset = Math.max(0, $from.pos - $from.start(depth));
+  const field: 'key' | 'value' = colonIndex === -1 || offset <= colonIndex
+    ? 'key'
+    : 'value';
+
+  return {
+    entryId: String(entryId),
+    key,
+    field,
+    offset,
+  };
+}
+
 function restoreEntryCursor(
   transaction: Transaction,
   cursor: EntryCursorSnapshot | undefined,
@@ -2726,6 +2849,10 @@ export class EntryEditor extends EventTarget {
   private readonly handleMouseOver: (event: MouseEvent) => void;
   private readonly handleMouseOut: (event: MouseEvent) => void;
   private suppressNextInput = false;
+  private gutterContent = new Map<string, HTMLElement>();
+  private entryGutterSlots = new Map<string, EntryGutterSlotBinding>();
+  private lastSelectionSignature: string | null = null;
+  private isFocused = false;
   private view: EditorView;
 
   constructor(container: HTMLElement, options: EntryEditorOptions = {}) {
@@ -2770,11 +2897,40 @@ export class EntryEditor extends EventTarget {
     let view!: EditorView;
     view = new EditorView(container, {
       state,
-      nodeViews: { entry: createEntryNodeView },
+      nodeViews: {
+        entry: (node, entryView, getPosition, decorations) => (
+          createEntryNodeView(
+            node,
+            entryView,
+            getPosition,
+            decorations,
+            {
+              registerGutterSlot: (entryId, binding) => {
+                this.entryGutterSlots.set(entryId, binding);
+                this.renderGutterSlot(entryId);
+              },
+              unregisterGutterSlot: (entryId, slotElement) => {
+                const current = this.entryGutterSlots.get(entryId);
+                if (current && current.slotElement !== slotElement) {
+                  return;
+                }
+                this.clearGutterSlot(entryId);
+                this.entryGutterSlots.delete(entryId);
+              },
+            },
+          )
+        ),
+      },
       dispatchTransaction: (transaction) => {
         const previousEntries = transaction.docChanged
           ? docToEntries(view.state.doc)
           : undefined;
+        const focusMeta = transaction.getMeta(focusedEntryKey) as
+          | { focused?: boolean }
+          | undefined;
+        if (typeof focusMeta?.focused === 'boolean') {
+          this.isFocused = focusMeta.focused;
+        }
         let nextState = view.state.apply(transaction);
         const stampTransaction = transaction.docChanged
           ? this.createStampTransaction(nextState)
@@ -2789,6 +2945,8 @@ export class EntryEditor extends EventTarget {
         if (transaction.docChanged && !this.suppressNextInput) {
           this.emitMutation(previousEntries ?? []);
         }
+
+        this.emitSelectionChange();
 
         this.suppressNextInput = false;
       },
@@ -2873,9 +3031,44 @@ export class EntryEditor extends EventTarget {
     this.view.focus();
   }
 
+  getSelectionSnapshot(): EntrySelectionSnapshot | null {
+    return this.isFocused
+      ? getEntrySelectionSnapshot(this.view.state)
+      : null;
+  }
+
+  /**
+   * Low-level gutter primitive: place a pre-built element into each entry's
+   * gutter slot, keyed by entry id. Diffs by element identity so an entry whose
+   * element is unchanged is not re-attached. The presence layer builds on top
+   * of this; it is not a public presence interface.
+   */
+  setGutterContents(contents: Map<string, HTMLElement>): void {
+    const previous = this.gutterContent;
+    this.gutterContent = new Map(contents);
+
+    const entryIds = new Set<string>([
+      ...previous.keys(),
+      ...this.gutterContent.keys(),
+    ]);
+
+    for (const entryId of entryIds) {
+      if (previous.get(entryId) === this.gutterContent.get(entryId)) {
+        continue;
+      }
+
+      this.renderGutterSlot(entryId);
+    }
+  }
+
   addEventListener(
     type: 'input',
     listener: EntryEditorInputEventListener | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: 'selectionchange',
+    listener: EntryEditorSelectionEventListener | null,
     options?: boolean | AddEventListenerOptions,
   ): void;
   addEventListener(
@@ -2888,6 +3081,7 @@ export class EntryEditor extends EventTarget {
     listener:
       | EventListenerOrEventListenerObject
       | EntryEditorInputEventListener
+      | EntryEditorSelectionEventListener
       | null,
     options?: boolean | AddEventListenerOptions,
   ): void {
@@ -2904,6 +3098,11 @@ export class EntryEditor extends EventTarget {
     options?: boolean | EventListenerOptions,
   ): void;
   removeEventListener(
+    type: 'selectionchange',
+    listener: EntryEditorSelectionEventListener | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | EventListenerOptions,
@@ -2913,6 +3112,7 @@ export class EntryEditor extends EventTarget {
     listener:
       | EventListenerOrEventListenerObject
       | EntryEditorInputEventListener
+      | EntryEditorSelectionEventListener
       | null,
     options?: boolean | EventListenerOptions,
   ): void {
@@ -2928,8 +3128,96 @@ export class EntryEditor extends EventTarget {
     this.container.removeEventListener('mouseout', this.handleMouseOut);
     this.hideTooltip();
     this.tooltip.remove();
+    this.entryGutterSlots.clear();
+    this.gutterContent.clear();
 
     this.view.destroy();
+  }
+
+  private emitSelectionChange(): void {
+    const snapshot = this.getSelectionSnapshot();
+    const signature = snapshot ? JSON.stringify(snapshot) : null;
+
+    if (signature === this.lastSelectionSignature) {
+      return;
+    }
+
+    this.lastSelectionSignature = signature;
+    this.dispatchEvent(
+      new CustomEvent<EntryEditorSelectionDetail>('selectionchange', {
+        detail: {
+          editor: this,
+          selection: snapshot,
+        },
+      }),
+    );
+  }
+
+  private clearGutterSlot(entryId: string): void {
+    const binding = this.entryGutterSlots.get(entryId);
+
+    if (!binding) {
+      return;
+    }
+
+    binding.slotElement.replaceChildren();
+    binding.entryElement.classList.remove('informe-entry--has-gutter-item');
+  }
+
+  private renderGutterSlot(entryId: string): void {
+    let binding = this.entryGutterSlots.get(entryId);
+
+    if (!binding) {
+      binding = this.lookupGutterSlotBinding(entryId);
+      if (binding) {
+        this.entryGutterSlots.set(entryId, binding);
+      }
+    }
+
+    if (!binding) {
+      return;
+    }
+
+    const element = this.gutterContent.get(entryId);
+
+    if (!element) {
+      this.clearGutterSlot(entryId);
+      return;
+    }
+
+    binding.slotElement.replaceChildren(element);
+    binding.entryElement.classList.add('informe-entry--has-gutter-item');
+  }
+
+  private lookupGutterSlotBinding(entryId: string): EntryGutterSlotBinding | undefined {
+    const entries = this.container.querySelectorAll<HTMLElement>('.informe-entry');
+
+    for (const entryElement of entries) {
+      if (entryElement.dataset.entryId !== entryId) {
+        continue;
+      }
+
+      const slotElement = entryElement.querySelector<HTMLElement>('.informe-entry-gutter-slot');
+
+      if (!slotElement) {
+        continue;
+      }
+
+      const parsed = parseEntryText(entryElement.textContent ?? '');
+      return {
+        entry: {
+          id: entryId,
+          order: entryElement.dataset.entryOrder ?? '',
+          key: parsed.key,
+          value: parsed.value,
+          disabled: entryElement.classList.contains('informe-entry--disabled'),
+        },
+        entryElement,
+        slotElement,
+      };
+    }
+
+    return undefined;
   }
 
   private emitMutation(previousEntries: readonly RawEntry[]): void {

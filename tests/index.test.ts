@@ -1308,3 +1308,123 @@ test('input rejects options on type: number at the type level', () => {
   // @ts-expect-error options is not allowed on number inputs
   input({type: 'number', options: ['1', '2', '3']})
 })
+
+test('Informe emits selectionchange with entry field metadata', () => {
+  installLayoutMocks()
+
+  const container = document.createElement('div')
+  document.body.append(container)
+
+  const informe = new Informe({symbol: 'XX:19029618'})
+  informe.mount(container)
+
+  const editor = (informe as unknown as {editor: EntryEditor}).editor
+  const view = (editor as unknown as {view: EditorView}).view
+  const selections: Array<ReturnType<typeof informe.getSelectionSnapshot>> = []
+
+  informe.addEventListener('selectionchange', (event) => {
+    selections.push(event.detail.selection)
+  })
+
+  view.dom.dispatchEvent(new Event('focus', {bubbles: true}))
+  setCursor(view, 0, 10)
+  view.dom.dispatchEvent(new Event('blur', {bubbles: true}))
+
+  expect(selections.some((selection) => selection?.field === 'value')).toBe(true)
+  expect(selections.at(-1)).toBeNull()
+
+  informe.destroy()
+  container.remove()
+})
+
+test('Informe renders peer presence in the entry gutter slot', () => {
+  installLayoutMocks()
+
+  const container = document.createElement('div')
+  document.body.append(container)
+
+  const informe = new Informe({symbol: 'XX:19029618'})
+  const entryId = informe.rawEntries()[0]?.id
+
+  expect(entryId).toEqual(expect.any(String))
+
+  informe.setPresence([
+    {id: 'peer-1', location: {entryId: entryId!}, user: {name: 'Eric Rabinowitz'}},
+  ])
+
+  informe.mount(container)
+
+  const slot = container.querySelector<HTMLElement>('.informe-entry-gutter-slot')
+  const entryNode = container.querySelector<HTMLElement>('.informe-entry')
+  const badge = slot?.querySelector<HTMLElement>('.informe-presence-badge')
+
+  expect(badge?.textContent).toBe('ER')
+  expect(entryNode?.classList.contains('informe-entry--has-gutter-item')).toBe(true)
+
+  informe.setPresence([])
+  expect(slot?.textContent).toBe('')
+  expect(entryNode?.classList.contains('informe-entry--has-gutter-item')).toBe(false)
+
+  informe.destroy()
+  container.remove()
+})
+
+test('Informe stacks peers per entry and caps overflow with a +N chip', () => {
+  installLayoutMocks()
+
+  const container = document.createElement('div')
+  document.body.append(container)
+
+  const informe = new Informe({symbol: 'XX:19029618'}, {maxPeersPerEntry: 2})
+  const entryId = informe.rawEntries()[0]?.id
+
+  informe.mount(container)
+
+  informe.setPresence([
+    {id: 'a', location: {entryId: entryId!}, user: {name: 'Aa Aa'}},
+    {id: 'b', location: {entryId: entryId!}, user: {name: 'Bb Bb'}},
+    {id: 'c', location: {entryId: entryId!}, user: {name: 'Cc Cc'}},
+  ])
+
+  const slot = container.querySelector<HTMLElement>('.informe-entry-gutter-slot')
+  const badges = slot?.querySelectorAll('.informe-presence-badge')
+  const overflow = slot?.querySelector<HTMLElement>('.informe-presence-overflow')
+
+  expect(badges?.length).toBe(2)
+  expect(overflow?.textContent).toBe('+1')
+
+  informe.destroy()
+  container.remove()
+})
+
+test('Informe reuses the rendered stack when a peer set is unchanged', () => {
+  installLayoutMocks()
+
+  const container = document.createElement('div')
+  document.body.append(container)
+
+  let renderCount = 0
+  const informe = new Informe(
+    {symbol: 'XX:19029618'},
+    {
+      renderPeer(peer) {
+        renderCount++
+        const el = document.createElement('span')
+        el.className = 'informe-presence-badge'
+        el.textContent = peer.id
+        return el
+      },
+    },
+  )
+  const entryId = informe.rawEntries()[0]?.id
+  informe.mount(container)
+
+  const peers = [{id: 'a', location: {entryId: entryId!}, user: {name: 'Aa'}}]
+  informe.setPresence(peers)
+  informe.setPresence([...peers])
+
+  expect(renderCount).toBe(1)
+
+  informe.destroy()
+  container.remove()
+})

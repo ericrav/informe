@@ -30,11 +30,23 @@ export type { DatetimeInputOptions } from './datetime';
 export { EntryEditor, createEntryEditor, parseEntryText } from './editor';
 export type {
   EntryChangeHandler,
+  EntryEditorSelectionDetail,
+  EntryEditorSelectionEvent,
+  EntryEditorSelectionEventListener,
   EntryEditorInputDetail,
   EntryEditorInputEvent,
   EntryEditorInputEventListener,
+  EntrySelectionSnapshot,
   EntryEditorOptions,
 } from './editor';
+
+export { defaultRenderPeer } from './presence';
+export type {
+  InformePeer,
+  InformePeerLocation,
+  InformePeerUser,
+  PeerRenderer,
+} from './presence';
 
 export { Informe } from './informe';
 export type {
@@ -45,6 +57,9 @@ export type {
   InformeInputDetail,
   InformeInputEvent,
   InformeInputEventListener,
+  InformeSelectionDetail,
+  InformeSelectionEvent,
+  InformeSelectionEventListener,
   InformeOptions,
 } from './informe';
 export type { ChangeRecord } from './changes';
