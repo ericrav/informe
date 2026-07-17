@@ -1,4 +1,9 @@
-import { Schema, type Node as ProseMirrorNode } from 'prosemirror-model';
+import {
+  Fragment,
+  Schema,
+  Slice,
+  type Node as ProseMirrorNode,
+} from 'prosemirror-model';
 import {
   EditorState,
   Plugin,
@@ -13,7 +18,14 @@ import {
   type NodeView,
 } from 'prosemirror-view';
 import { keymap } from 'prosemirror-keymap';
-import { history, redo, undo } from 'prosemirror-history';
+import { closeHistory, history, redo, undo } from 'prosemirror-history';
+import {
+  ReplaceStep,
+  Step,
+  StepMap,
+  StepResult,
+  type Mappable,
+} from 'prosemirror-transform';
 import { EntryStamper, orderBetween } from './id';
 import { diffEntries, type ChangeRecord } from './changes';
 import type {
@@ -229,6 +241,74 @@ function entryTextToContent(text: string): ProseMirrorNode[] {
   return content;
 }
 
+function entryTextToSlice(text: string): Slice {
+  return new Slice(Fragment.fromArray(entryTextToContent(text)), 0, 0);
+}
+
+class CommitOptionPreviewStep extends Step {
+  constructor(
+    readonly from: number,
+    readonly to: number,
+    readonly originalValue: string,
+  ) {
+    super();
+  }
+
+  apply(doc: ProseMirrorNode): StepResult {
+    return StepResult.ok(doc);
+  }
+
+  getMap(): StepMap {
+    return StepMap.empty;
+  }
+
+  invert(): Step {
+    return new ReplaceStep(
+      this.from,
+      this.to,
+      entryTextToSlice(this.originalValue),
+    );
+  }
+
+  map(mapping: Mappable): Step | null {
+    const from = mapping.mapResult(this.from, 1);
+    const to = mapping.mapResult(this.to, -1);
+
+    if (from.deletedAcross && to.deletedAcross) {
+      return null;
+    }
+
+    return new CommitOptionPreviewStep(from.pos, to.pos, this.originalValue);
+  }
+
+  toJSON(): {
+    stepType: string;
+    from: number;
+    to: number;
+    originalValue: string;
+  } {
+    return {
+      stepType: 'informeCommitOptionPreview',
+      from: this.from,
+      to: this.to,
+      originalValue: this.originalValue,
+    };
+  }
+
+  static fromJSON(
+    _schema: Schema,
+    json: { from: number; to: number; originalValue: string },
+  ): CommitOptionPreviewStep {
+    return new CommitOptionPreviewStep(
+      json.from,
+      json.to,
+      json.originalValue,
+    );
+  }
+}
+
+Step.jsonID('informeCommitOptionPreview', CommitOptionPreviewStep);
+
 function entryNodeToText(node: ProseMirrorNode): string {
   let text = '';
 
@@ -283,6 +363,7 @@ interface SchemaKeyTypeaheadPluginState {
 
 interface SchemaValueTypeaheadPluginState {
   openRequested: boolean;
+  previewRequested: boolean;
   showAllOptions: boolean;
 }
 
@@ -293,6 +374,7 @@ const inactiveSchemaKeyTypeaheadState: SchemaKeyTypeaheadPluginState = {
 
 const inactiveSchemaValueTypeaheadState: SchemaValueTypeaheadPluginState = {
   openRequested: false,
+  previewRequested: false,
   showAllOptions: false,
 };
 
@@ -1605,11 +1687,12 @@ class SchemaKeyTypeaheadView {
   };
 
   private acceptSelectedSuggestion(): void {
-    if (!this.active) {
+    const active = this.active;
+    if (!active) {
       return;
     }
 
-    const suggestion = this.active.suggestions[this.selectedIndex];
+    const suggestion = active.suggestions[this.selectedIndex];
 
     if (!suggestion) {
       return;
@@ -1620,11 +1703,11 @@ class SchemaKeyTypeaheadView {
       descriptor?.options != null && descriptor.options.length > 0;
 
     const replacement = `${suggestion.key}:`;
-    const position = this.active.from + replacement.length;
+    const position = active.from + replacement.length;
     const transaction = this.view.state.tr.insertText(
       replacement,
-      this.active.from,
-      this.active.to,
+      active.from,
+      active.to,
     );
 
     transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
@@ -1836,6 +1919,7 @@ interface ActiveSchemaValueTypeahead extends SchemaValueTypeaheadMatch {
   from: number;
   to: number;
   anchor: number;
+  currentValue: string;
   key: string;
   selectedOptionIndex: number;
   signature: string;
@@ -1845,7 +1929,11 @@ interface ActiveSchemaValueTypeahead extends SchemaValueTypeaheadMatch {
 function getActiveSchemaValueTypeahead(
   state: EditorState,
   schema: SchemaDescriptorMap,
-  options: { showAllOptions: boolean },
+  options: {
+    allowExactMatch?: boolean;
+    showAllOptions: boolean;
+    suggestions?: SchemaValueSuggestion[];
+  },
 ): ActiveSchemaValueTypeahead | undefined {
   if (!state.selection.empty) {
     return undefined;
@@ -1872,10 +1960,12 @@ function getActiveSchemaValueTypeahead(
     return undefined;
   }
 
-  const suggestions = getSchemaValueSuggestions(
-    descriptor,
-    options.showAllOptions ? '' : match.query,
-  );
+  const suggestions =
+    options.suggestions
+    ?? getSchemaValueSuggestions(
+      descriptor,
+      options.showAllOptions ? '' : match.query,
+    );
 
   if (suggestions.length === 0) {
     return undefined;
@@ -1886,7 +1976,7 @@ function getActiveSchemaValueTypeahead(
     (s) => s.value.toLowerCase() === normalizedQuery,
   );
 
-  if (isExactMatch && !options.showAllOptions) {
+  if (isExactMatch && !options.showAllOptions && !options.allowExactMatch) {
     return undefined;
   }
 
@@ -1901,6 +1991,7 @@ function getActiveSchemaValueTypeahead(
     to,
     key,
     anchor: state.selection.from,
+    currentValue,
     selectedOptionIndex: suggestions.findIndex(
       (suggestion) => suggestion.value === currentValue,
     ),
@@ -1918,6 +2009,13 @@ function getActiveSchemaValueTypeahead(
 
 let schemaValueTypeaheadInstanceCounter = 0;
 
+interface SchemaValueTypeaheadSession {
+  hasPreview: boolean;
+  originalValue: string;
+  showAllOptions: boolean;
+  suggestions: SchemaValueSuggestion[];
+}
+
 class SchemaValueTypeaheadView {
   private readonly element: HTMLDivElement;
   private readonly listElement: HTMLDivElement;
@@ -1925,6 +2023,7 @@ class SchemaValueTypeaheadView {
   private dismissedSignature: string | undefined;
   private openRequest = inactiveSchemaValueTypeaheadState;
   private selectedIndex = 0;
+  private session: SchemaValueTypeaheadSession | undefined;
   private view: EditorView;
 
   constructor(
@@ -1948,23 +2047,57 @@ class SchemaValueTypeaheadView {
     this.update(view, inactiveSchemaValueTypeaheadState);
   }
 
-  update(view: EditorView, openRequest: SchemaValueTypeaheadPluginState): void {
+  update(
+    view: EditorView,
+    openRequest: SchemaValueTypeaheadPluginState,
+    previousState?: EditorState,
+  ): void {
     this.view = view;
     const shouldOpen =
       openRequest.openRequested || this.openRequest.openRequested;
     const showAllOptions =
       openRequest.showAllOptions || this.openRequest.showAllOptions;
+    const isPreviewUpdate =
+      openRequest.previewRequested && this.session != null;
 
     this.openRequest = inactiveSchemaValueTypeaheadState;
+    if (
+      this.session &&
+      !isPreviewUpdate &&
+      !shouldOpen &&
+      previousState &&
+      (
+        !view.state.doc.eq(previousState.doc)
+        || !view.state.selection.eq(previousState.selection)
+      )
+    ) {
+      this.forgetSession();
+      return;
+    }
+
     const next = getActiveSchemaValueTypeahead(
       view.state,
       this.schemaRef.current,
-      { showAllOptions },
+      {
+        allowExactMatch: isPreviewUpdate,
+        showAllOptions:
+          isPreviewUpdate && this.session
+            ? this.session.showAllOptions
+            : showAllOptions,
+        suggestions:
+          isPreviewUpdate && this.session
+            ? this.session.suggestions
+            : undefined,
+      },
     );
 
-    if (!next || !view.hasFocus() || (!this.active && !shouldOpen)) {
-      this.active = undefined;
+    if (!view.hasFocus()) {
       this.hide();
+      return;
+    }
+
+    if (!next || (!this.active && !shouldOpen)) {
+      this.forgetSession();
       return;
     }
 
@@ -1980,12 +2113,20 @@ class SchemaValueTypeaheadView {
     }
 
     if (this.dismissedSignature === next.signature) {
-      this.active = undefined;
-      this.hide();
+      this.forgetSession();
       return;
     }
 
-    if (this.active?.signature !== next.signature) {
+    if (shouldOpen && !this.session) {
+      this.session = {
+        hasPreview: false,
+        originalValue: next.currentValue,
+        showAllOptions,
+        suggestions: next.suggestions,
+      };
+    }
+
+    if (!isPreviewUpdate && this.active?.signature !== next.signature) {
       this.selectedIndex =
         showAllOptions && next.selectedOptionIndex >= 0
           ? next.selectedOptionIndex
@@ -2012,8 +2153,82 @@ class SchemaValueTypeaheadView {
   }
 
   close(): void {
+    this.finishSession();
+  }
+
+  handleEditorInteraction(): void {
+    this.finishSession();
+  }
+
+  private forgetSession(): void {
     this.active = undefined;
+    this.session = undefined;
+    this.dismissedSignature = undefined;
     this.hide();
+  }
+
+  private finishSession(): void {
+    const active = this.active;
+    const session = this.session;
+    this.forgetSession();
+
+    if (!active || !session?.hasPreview) {
+      return;
+    }
+
+    const transaction = this.view.state.tr.step(
+      new CommitOptionPreviewStep(
+        active.from,
+        active.to,
+        session.originalValue,
+      ),
+    );
+    closeHistory(transaction);
+    this.view.dispatch(transaction);
+  }
+
+  private restoreSession(): void {
+    const active = this.active;
+    const session = this.session;
+    this.forgetSession();
+
+    if (!active || !session) {
+      return;
+    }
+
+    const position = active.from + session.originalValue.length;
+    const transaction = this.view.state.tr.replaceWith(
+      active.from,
+      active.to,
+      entryTextToContent(session.originalValue),
+    );
+    transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
+    transaction.setMeta('addToHistory', false);
+    this.view.dispatch(transaction.scrollIntoView());
+    this.view.focus();
+  }
+
+  private previewSelectedSuggestion(): void {
+    const active = this.active;
+    const session = this.session;
+    const suggestion = active?.suggestions[this.selectedIndex];
+
+    if (!active || !session || !suggestion) {
+      return;
+    }
+
+    session.hasPreview = true;
+    const position = active.from + suggestion.value.length;
+    const transaction = this.view.state.tr.replaceWith(
+      active.from,
+      active.to,
+      entryTextToContent(suggestion.value),
+    );
+    transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
+    transaction.setMeta('addToHistory', false);
+    transaction.setMeta(schemaValueTypeaheadKey, { previewRequested: true });
+    this.view.dispatch(transaction.scrollIntoView());
+    this.view.focus();
   }
 
   handleKeyDown(event: KeyboardEvent): boolean {
@@ -2021,43 +2236,81 @@ class SchemaValueTypeaheadView {
       return false;
     }
 
-    if (event.key === 'ArrowDown') {
+    if (
+      event.key === 'ArrowDown'
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.shiftKey
+    ) {
       event.preventDefault();
       this.selectedIndex =
         (this.selectedIndex + 1) % this.active.suggestions.length;
-      this.render();
+      this.previewSelectedSuggestion();
       this.scrollSelectedListItemIntoView();
       return true;
     }
 
-    if (event.key === 'ArrowUp') {
+    if (
+      event.key === 'ArrowUp'
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !event.shiftKey
+    ) {
       event.preventDefault();
       this.selectedIndex =
         (this.selectedIndex - 1 + this.active.suggestions.length) %
         this.active.suggestions.length;
-      this.render();
+      this.previewSelectedSuggestion();
       this.scrollSelectedListItemIntoView();
       return true;
     }
 
     if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
       event.preventDefault();
-      this.acceptSelectedSuggestion();
+      if (this.session) {
+        this.previewSelectedSuggestion();
+        this.finishSession();
+      } else {
+        this.acceptSelectedSuggestion();
+      }
       return true;
     }
 
     if (event.key === 'Escape') {
       event.preventDefault();
-      this.dismissedSignature = this.active.signature;
-      this.active = undefined;
-      this.hide();
+      this.restoreSession();
       return true;
+    }
+
+    if (
+      (event.key === 'Enter' && event.shiftKey)
+      || event.altKey
+      || event.metaKey
+      || event.ctrlKey
+      || [
+        'ArrowLeft',
+        'ArrowRight',
+        'ArrowDown',
+        'ArrowUp',
+        'Backspace',
+        'Delete',
+        'End',
+        'Home',
+        'PageDown',
+        'PageUp',
+      ].includes(event.key)
+    ) {
+      this.finishSession();
     }
 
     return false;
   }
 
   requestOpenAfterTextInput(text: string): void {
+    this.finishSession();
+
     if (!text.includes(':') && !this.isInValuePosition()) {
       return;
     }
@@ -2082,6 +2335,7 @@ class SchemaValueTypeaheadView {
     ) {
       this.openRequest = {
         openRequested: true,
+        previewRequested: false,
         showAllOptions: false,
       };
     }
@@ -2119,7 +2373,12 @@ class SchemaValueTypeaheadView {
 
     event.preventDefault();
     this.selectedIndex = Number(item.dataset.informeSchemaTypeaheadIndex);
-    this.acceptSelectedSuggestion();
+    if (this.session) {
+      this.previewSelectedSuggestion();
+      this.finishSession();
+    } else {
+      this.acceptSelectedSuggestion();
+    }
   };
 
   private readonly handleMouseOver = (event: MouseEvent) => {
@@ -2142,21 +2401,23 @@ class SchemaValueTypeaheadView {
   };
 
   private acceptSelectedSuggestion(): void {
-    if (!this.active) {
+    const active = this.active;
+    if (!active) {
       return;
     }
 
-    const suggestion = this.active.suggestions[this.selectedIndex];
+    const suggestion = active.suggestions[this.selectedIndex];
 
     if (!suggestion) {
       return;
     }
 
-    const position = this.active.from + suggestion.value.length;
-    const transaction = this.view.state.tr.insertText(
-      suggestion.value,
-      this.active.from,
-      this.active.to,
+    this.forgetSession();
+    const position = active.from + suggestion.value.length;
+    const transaction = this.view.state.tr.replaceWith(
+      active.from,
+      active.to,
+      entryTextToContent(suggestion.value),
     );
 
     transaction.setSelection(Selection.near(transaction.doc.resolve(position)));
@@ -2286,12 +2547,21 @@ function schemaValueTypeaheadPlugin(schemaRef: {
       apply(transaction) {
         const meta = transaction.getMeta(schemaValueTypeaheadKey);
 
+        if (meta?.previewRequested === true) {
+          return {
+            openRequested: false,
+            previewRequested: true,
+            showAllOptions: false,
+          };
+        }
+
         if (meta?.openRequested !== true) {
           return inactiveSchemaValueTypeaheadState;
         }
 
         return {
           openRequested: true,
+          previewRequested: false,
           showAllOptions: meta.showAllOptions === true,
         };
       },
@@ -2305,12 +2575,32 @@ function schemaValueTypeaheadPlugin(schemaRef: {
         return false;
       },
       handleDOMEvents: {
+        beforeinput() {
+          typeaheadView?.handleEditorInteraction();
+          return false;
+        },
         blur() {
           typeaheadView?.close();
           return false;
         },
+        compositionstart() {
+          typeaheadView?.handleEditorInteraction();
+          return false;
+        },
+        drop() {
+          typeaheadView?.handleEditorInteraction();
+          return false;
+        },
         focus(view) {
           typeaheadView?.update(view, inactiveSchemaValueTypeaheadState);
+          return false;
+        },
+        mousedown() {
+          typeaheadView?.handleEditorInteraction();
+          return false;
+        },
+        paste() {
+          typeaheadView?.handleEditorInteraction();
           return false;
         },
       },
@@ -2319,11 +2609,12 @@ function schemaValueTypeaheadPlugin(schemaRef: {
       typeaheadView = new SchemaValueTypeaheadView(view, schemaRef);
 
       return {
-        update(updatedView) {
+        update(updatedView, previousState) {
           typeaheadView?.update(
             updatedView,
             schemaValueTypeaheadKey.getState(updatedView.state)
               ?? inactiveSchemaValueTypeaheadState,
+            previousState,
           );
         },
         destroy() {
@@ -3000,11 +3291,11 @@ export class EntryEditor extends EventTarget {
     const state = EditorState.create({
       doc: entriesToDoc(this.stamper.stampEntries(options.entries ?? [])),
       plugins: [
+        schemaValueTypeaheadPlugin(this.schemaRef),
         history(),
         schemaHintsPlugin(this.schemaRef),
         focusedEntryPlugin(),
         schemaKeyTypeaheadPlugin(this.schemaRef),
-        schemaValueTypeaheadPlugin(this.schemaRef),
         keymap({
           'Shift-Enter': insertValueNewline,
           Enter: insertEntry,
@@ -3070,6 +3361,15 @@ export class EntryEditor extends EventTarget {
             stampTransaction.setMeta(
               schemaKeyTypeaheadKey,
               schemaKeyTypeaheadMeta,
+            );
+          }
+          const schemaValueTypeaheadMeta = transaction.getMeta(
+            schemaValueTypeaheadKey,
+          );
+          if (schemaValueTypeaheadMeta !== undefined) {
+            stampTransaction.setMeta(
+              schemaValueTypeaheadKey,
+              schemaValueTypeaheadMeta,
             );
           }
           nextState = nextState.apply(stampTransaction);

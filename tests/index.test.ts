@@ -1421,6 +1421,349 @@ test('option button keeps arbitrary values and leaves every option unselected', 
   }
 })
 
+test('option arrows preview values and Escape restores the session value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'green'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+
+    pressKey(view, 'ArrowDown')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'blue'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).not.toBeNull()
+
+    pressKey(view, 'ArrowUp')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+
+    pressKey(view, 'ArrowUp')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'red'},
+    ])
+
+    pressKey(view, 'Escape')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).toBeNull()
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter accepts an option preview and one undo restores the session value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+    pressEnter(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).toBeNull()
+
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('mouse acceptance after a preview commits from the session value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+
+    document.querySelector<HTMLElement>(
+      '[data-informe-schema-typeahead-index="2"]',
+    )?.dispatchEvent(
+      new MouseEvent('mousedown', {bubbles: true, cancelable: true}),
+    )
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'blue'},
+    ])
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Enter accepts the option highlighted after hovering a preview', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+    document.querySelector<HTMLElement>(
+      '[data-informe-schema-typeahead-index="2"]',
+    )?.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}))
+    pressEnter(view)
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'blue'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('blurring after a preview commits one undoable value change', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+    view.dom.blur()
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('Shift-Enter commits a preview before inserting a value newline', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+    pressKey(view, 'Enter', {shiftKey: true})
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green\n'},
+    ])
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('modified option arrows finish the preview session before cursor movement', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+
+    const shiftedArrow = new KeyboardEvent('keydown', {
+      key: 'ArrowDown',
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    view.dom.dispatchEvent(shiftedArrow)
+    expect(shiftedArrow.defaultPrevented).toBe(false)
+
+    pressKey(view, 'z', {ctrlKey: true})
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('native history undo finishes and reverts an active option preview', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+
+    const historyUndo = new InputEvent('beforeinput', {
+      inputType: 'historyUndo',
+      bubbles: true,
+      cancelable: true,
+    })
+    view.dom.dispatchEvent(historyUndo)
+
+    expect(historyUndo.defaultPrevented).toBe(true)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).toBeNull()
+  } finally {
+    destroy()
+  }
+})
+
+test('Escape restores an empty value after accepting an option-backed key', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: '', value: ''}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.focus()
+    setCursor(view, 0, 0)
+    typeText(view, 'col')
+    pressTab(view)
+    pressKey(view, 'ArrowDown')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'green'},
+    ])
+
+    pressKey(view, 'Escape')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: '', hasSeparator: true},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('typing after a preview starts from the preview and forgets the old value', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+    typeText(view, 'ish')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'greenish'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).toBeNull()
+
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'Escape')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'greenish'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('external value updates end a preview session without restoring stale text', () => {
+  let synchronized = false
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {
+      schema: {color: {options: ['red', 'green', 'blue']}},
+      onChange(entries, instance) {
+        if (!synchronized && entries[0]?.value === 'green') {
+          synchronized = true
+          instance.setEntries(
+            [{...entries[0], value: 'server'}],
+            {emitInput: false},
+          )
+        }
+      },
+    },
+  )
+
+  try {
+    view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )?.click()
+    pressKey(view, 'ArrowDown')
+
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'server'},
+    ])
+    expect(
+      document.querySelector('.informe-schema-typeahead--visible'),
+    ).toBeNull()
+
+    const escape = new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    view.dom.dispatchEvent(escape)
+    expect(escape.defaultPrevented).toBe(false)
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'server'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
 test('input rejects options on type: number at the type level', () => {
   // @ts-expect-error options is not allowed on number inputs
   input({type: 'number', options: ['1', '2', '3']})
