@@ -1330,6 +1330,97 @@ test('returns empty suggestions for descriptor without options', () => {
   expect(getSchemaValueSuggestions({options: []}, '')).toEqual([])
 })
 
+test('option button opens all values and marks the current selection', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: '#00AA00'}],
+    {
+      schema: {
+        color: {
+          options: [
+            {label: 'Red', value: '#FF0000'},
+            {label: 'Green', value: '#00AA00'},
+            {label: 'Blue', value: '#0000FF'},
+          ],
+        },
+      },
+    },
+  )
+
+  try {
+    const button = view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )
+    const value = view.dom.querySelector<HTMLElement>('.informe-entry-value')
+
+    expect(button).not.toBeNull()
+    expect(
+      value && button
+        ? value.compareDocumentPosition(button)
+          & Node.DOCUMENT_POSITION_FOLLOWING
+        : 0,
+    ).not.toBe(0)
+    expect(button?.contentEditable).toBe('false')
+    expect(button?.tabIndex).toBe(0)
+    button?.dispatchEvent(
+      new MouseEvent('click', {bubbles: true, cancelable: true}),
+    )
+
+    const typeahead = document.querySelector(
+      '.informe-schema-typeahead--visible',
+    )
+    const options = Array.from(
+      typeahead?.querySelectorAll(
+        '.informe-schema-typeahead-option-primary',
+      ) ?? [],
+      (element) => element.textContent,
+    )
+    const selected = typeahead?.querySelector(
+      '.informe-schema-typeahead-item--selected .informe-schema-typeahead-option-primary',
+    )
+    const active = typeahead?.querySelector(
+      '.informe-schema-typeahead-item--active .informe-schema-typeahead-option-primary',
+    )
+
+    expect(options).toEqual(['Red', 'Green', 'Blue'])
+    expect(selected?.textContent).toBe('Green')
+    expect(active?.textContent).toBe('Green')
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: '#00AA00'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
+test('option button keeps arbitrary values and leaves every option unselected', () => {
+  const {editor, view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'color', value: 'custom'}],
+    {schema: {color: {options: ['red', 'green', 'blue']}}},
+  )
+
+  try {
+    const button = view.dom.querySelector<HTMLButtonElement>(
+      '.informe-entry-options-button',
+    )
+    button?.dispatchEvent(
+      new MouseEvent('click', {bubbles: true, cancelable: true}),
+    )
+
+    const typeahead = document.querySelector(
+      '.informe-schema-typeahead--visible',
+    )
+
+    expect(
+      typeahead?.querySelector('.informe-schema-typeahead-item--selected'),
+    ).toBeNull()
+    expect(rawEntryData(editor.getEntries())).toEqual([
+      {key: 'color', value: 'custom'},
+    ])
+  } finally {
+    destroy()
+  }
+})
+
 test('input rejects options on type: number at the type level', () => {
   // @ts-expect-error options is not allowed on number inputs
   input({type: 'number', options: ['1', '2', '3']})
