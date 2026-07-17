@@ -278,6 +278,32 @@ test('Enter at the end of an entry inserts an empty entry below', () => {
   }
 })
 
+test('Enter opens key suggestions for the new entry', () => {
+  const {view, destroy} = createTestEditor(
+    [{id: 'first', order: 'a0', key: 'name', value: 'Bob'}],
+    {schema: {name: {}, age: {}, food: {}}},
+  )
+
+  try {
+    view.focus()
+    setCursor(view, 0, 'name:Bob'.length)
+    pressEnter(view)
+
+    const typeahead = document.querySelector(
+      '.informe-schema-typeahead--visible',
+    )
+    const suggestedKeys = Array.from(
+      typeahead?.querySelectorAll('.informe-schema-typeahead-key') ?? [],
+      (element) => element.textContent,
+    )
+
+    expect(typeahead).not.toBeNull()
+    expect(suggestedKeys).toEqual(['age', 'food'])
+  } finally {
+    destroy()
+  }
+})
+
 test('Enter in the middle of an entry splits following text into a new entry', () => {
   const {editor, view, destroy} = createTestEditor([
     {id: 'first', order: 'a0', key: 'name', value: 'Bob'},

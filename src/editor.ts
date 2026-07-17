@@ -2937,6 +2937,15 @@ export class EntryEditor extends EventTarget {
           : undefined;
 
         if (stampTransaction) {
+          const schemaKeyTypeaheadMeta = transaction.getMeta(
+            schemaKeyTypeaheadKey,
+          );
+          if (schemaKeyTypeaheadMeta !== undefined) {
+            stampTransaction.setMeta(
+              schemaKeyTypeaheadKey,
+              schemaKeyTypeaheadMeta,
+            );
+          }
           nextState = nextState.apply(stampTransaction);
         }
 
