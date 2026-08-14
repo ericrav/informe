@@ -1769,6 +1769,42 @@ test('input rejects options on type: number at the type level', () => {
   input({type: 'number', options: ['1', '2', '3']})
 })
 
+test('input infers value unions from string options', () => {
+  const chamber = input({
+    label: 'Chamber',
+    options: ['senate', 'house'],
+  })
+  const labeled = input({
+    options: [
+      {label: 'Senate', value: 'senate'},
+      {label: 'House', value: 'house'},
+    ],
+  })
+
+  type Chamber = typeof chamber extends {readonly __informeInput: true}
+    ? typeof chamber extends import('../src/input').InputDescriptor<infer V>
+      ? V
+      : never
+    : never
+  type Labeled = typeof labeled extends import('../src/input').InputDescriptor<
+    infer V
+  >
+    ? V
+    : never
+
+  const chamberValue: Chamber = 'senate'
+  const labeledValue: Labeled = 'house'
+  expect(chamberValue).toBe('senate')
+  expect(labeledValue).toBe('house')
+
+  // @ts-expect-error only option values are assignable
+  const _invalidChamber: Chamber = 'congress'
+  // @ts-expect-error only option values are assignable
+  const _invalidLabeled: Labeled = 'congress'
+  void _invalidChamber
+  void _invalidLabeled
+})
+
 test('Informe emits selectionchange with entry field metadata', () => {
   installLayoutMocks()
 

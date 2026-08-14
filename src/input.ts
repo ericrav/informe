@@ -81,10 +81,31 @@ type WidenFieldValue<TValue> = TValue extends number
   : TValue extends string
     ? string
     : InformeFieldValue;
-type InferInputValue<TDescriptor> =
-  TDescriptor extends InputDescriptor<infer TValue>
-    ? WidenFieldValue<TValue>
+
+type ExtractOptionValue<T> = T extends string
+  ? T
+  : T extends { readonly value: infer V extends string }
+    ? V
     : never;
+
+type InferOptionsValue<TOptions> = TOptions extends {
+  readonly options: readonly (infer Option)[];
+}
+  ? ExtractOptionValue<Option>
+  : never;
+
+type InferInputOptionsValue<TOptions extends InputOptions> = TOptions extends {
+  type: 'number';
+}
+  ? number
+  : TOptions extends { readonly options: readonly unknown[] }
+    ? InferOptionsValue<TOptions>
+    : TOptions extends { default: infer TValue extends InformeFieldValue }
+      ? WidenFieldValue<TValue>
+      : string;
+
+type InferInputValue<TDescriptor> =
+  TDescriptor extends InputDescriptor<infer TValue> ? TValue : never;
 type InferFieldValue<TField> = TField extends number
   ? number
   : TField extends string
@@ -113,13 +134,7 @@ export interface NormalizedFields {
 export function input<const TOptions extends InputOptions>(
   options: TOptions &
     (TOptions extends { type: 'number' } ? { options?: never } : unknown),
-): InputDescriptor<
-  TOptions extends { default: infer TValue extends InformeFieldValue }
-    ? WidenFieldValue<TValue>
-    : TOptions extends { type: 'number' }
-      ? number
-      : string
-> {
+): InputDescriptor<InferInputOptionsValue<TOptions>> {
   const descriptor = {
     ...options,
     type: options.type ?? inferInputType(options.default) ?? 'string',
@@ -131,11 +146,7 @@ export function input<const TOptions extends InputOptions>(
   });
 
   return descriptor as unknown as InputDescriptor<
-    TOptions extends { default: infer TValue extends InformeFieldValue }
-      ? WidenFieldValue<TValue>
-      : TOptions extends { type: 'number' }
-        ? number
-        : string
+    InferInputOptionsValue<TOptions>
   >;
 }
 
