@@ -1,8 +1,8 @@
 {
   "name": "informe",
   "type": "module",
-  "version": "0.0.1",
-  "description": "Formless input for evolving apps",
+  "version": "0.0.2",
+  "description": "Shapeless forms for malleable software",
   "author": "Eric Rabinowitz <er@ericrabinowitz.com>",
   "license": "MIT",
   "homepage": "https://github.com/ericrav/informe#readme",
